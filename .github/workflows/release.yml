@@ -1,0 +1,69 @@
+# Builds Overview on Windows and publishes a GitHub Release whenever the version in
+# src/Overview/Overview.csproj changes on main. The release gets Overview-Setup.exe
+# (which installed copies update from) and Overview-standalone.exe.
+# Notes come from .github/release-notes.md. A version that's already released is skipped.
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - src/Overview/Overview.csproj
+      - .github/release-notes.md
+      - .github/workflows/release.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read version
+        id: version
+        shell: pwsh
+        run: |
+          [xml]$project = Get-Content src/Overview/Overview.csproj
+          $version = ($project.Project.PropertyGroup | Where-Object { $_.Version } | Select-Object -First 1).Version
+          if (-not $version) { throw "No <Version> in Overview.csproj" }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          Write-Host "Version $version"
+
+      - name: Check if already released
+        id: check
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "v${{ steps.version.outputs.version }}" --repo "${{ github.repository }}" *> $null
+          if ($LASTEXITCODE -eq 0) {
+            "exists=true" >> $env:GITHUB_OUTPUT
+            Write-Host "v${{ steps.version.outputs.version }} is already released, nothing to do."
+          } else {
+            "exists=false" >> $env:GITHUB_OUTPUT
+          }
+          exit 0
+
+      - uses: actions/setup-dotnet@v4
+        if: steps.check.outputs.exists == 'false'
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Build
+        if: steps.check.outputs.exists == 'false'
+        shell: pwsh
+        run: ./build.ps1
+
+      - name: Publish release
+        if: steps.check.outputs.exists == 'false'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $v = "${{ steps.version.outputs.version }}"
+          gh release create "v$v" dist/Overview-Setup.exe dist/Overview-standalone.exe `
+            --repo "${{ github.repository }}" --target "${{ github.sha }}" `
+            --title "Overview $v" --notes-file .github/release-notes.md

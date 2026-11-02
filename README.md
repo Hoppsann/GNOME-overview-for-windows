@@ -128,8 +128,10 @@ cd GNOME-overview-for-windows
 This creates `dist/Overview-Setup.exe` and `dist/Overview-standalone.exe`. They are the same
 program: when the file name contains "Setup", it runs as the installer.
 
-To publish a release, create a GitHub Release with a version tag like `v1.8.0` and attach
-`Overview-Setup.exe`. Installed copies with updates turned on will pick it up.
+Releases are automatic: when the `<Version>` in `src/Overview/Overview.csproj` changes on `main`,
+the [Release workflow](.github/workflows/release.yml) builds both exes on Windows and publishes them
+as a GitHub Release, using `.github/release-notes.md` as the description. Installed copies with
+updates turned on pick it up from there.
 
 <details>
 <summary><b>How it works</b></summary>
