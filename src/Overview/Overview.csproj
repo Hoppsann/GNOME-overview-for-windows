@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>Overview</AssemblyName>
+    <RootNamespace>Overview</RootNamespace>
+    <StartupObject>Overview.App</StartupObject>
+    <ApplicationIcon>Assets\overview.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <Version>1.8.0</Version>
+    <Product>Overview</Product>
+    <Company>Hoppsann</Company>
+    <NoWarn>$(NoWarn);WFAC010</NoWarn>
+    <Description>GNOME-style Activities overview for Windows</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Assets\overview.ico" LogicalName="overview.ico" />
+  </ItemGroup>
+
+</Project>
