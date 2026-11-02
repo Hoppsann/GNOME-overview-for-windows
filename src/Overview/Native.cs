@@ -255,6 +255,16 @@ internal static class Native
         return ((uint)SHAppBarMessage(ABM_GETSTATE, ref d) & ABS_AUTOHIDE) != 0;
     }
 
+    /// <summary>True if <paramref name="top"/> is above <paramref name="other"/> in the z-order.</summary>
+    public static bool IsAbove(IntPtr top, IntPtr other)
+    {
+        const uint GW_HWNDNEXT = 2;
+        int guard = 0;
+        for (IntPtr w = GetWindow(top, GW_HWNDNEXT); w != IntPtr.Zero && guard++ < 5000; w = GetWindow(w, GW_HWNDNEXT))
+            if (w == other) return true;
+        return false;
+    }
+
     /// <summary>The taskbar on a monitor: the main one, or a secondary one if "show on all displays" is on.</summary>
     public static IntPtr TaskbarOnMonitor(IntPtr monitor)
     {

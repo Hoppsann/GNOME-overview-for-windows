@@ -445,6 +445,7 @@ internal sealed class OverviewWindow : Window
             Native.SetWindowPos(_hwnd, Native.HWND_TOPMOST, _mon.Left, _mon.Top, mw, mh, 0);
             Native.ForceForeground(_hwnd);
             Activate();
+            RaiseTaskbar(); // activating the overview put it above an auto-hide taskbar
             _search.Focus();
             Keyboard.Focus(_search);
             UpdateLayout();
@@ -513,6 +514,7 @@ internal sealed class OverviewWindow : Window
     IntPtr _autoHideTaskbar;
     int _taskbarEdge;      // 0 left, 1 top, 2 right, 3 bottom
     int _taskbarThickness; // physical pixels
+    Thickness _taskbarInset; // physical pixels the window grid stays clear of (auto-hide taskbar on top)
     DispatcherTimer _taskbarTimer = new() { Interval = TimeSpan.FromMilliseconds(250) };
 
     /// <summary>
@@ -523,6 +525,7 @@ internal sealed class OverviewWindow : Window
     void ShowAutoHideTaskbar(IntPtr monitor)
     {
         _autoHideTaskbar = IntPtr.Zero;
+        _taskbarInset = new Thickness(0);
         _taskbarTimer.Stop();
         if (!Native.IsTaskbarAutoHide()) return;
         var tb = Native.TaskbarOnMonitor(monitor);
@@ -539,12 +542,16 @@ internal sealed class OverviewWindow : Window
         _taskbarThickness = thickness;
         _autoHideTaskbar = tb;
 
+        // Cover the whole screen, including behind the taskbar. The taskbar is see-through, so if the
+        // overview stopped short of it, it would show the (maybe bright) app window behind it instead
+        // of the overview's background. Windows are kept clear of it with an inset instead.
+        _mon = m;
         switch (_taskbarEdge)
         {
-            case 0: _mon.Left = Math.Max(_mon.Left, m.Left + thickness); break;
-            case 1: _mon.Top = Math.Max(_mon.Top, m.Top + thickness); break;
-            case 2: _mon.Right = Math.Min(_mon.Right, m.Right - thickness); break;
-            default: _mon.Bottom = Math.Min(_mon.Bottom, m.Bottom - thickness); break;
+            case 0: _taskbarInset.Left = thickness; break;
+            case 1: _mon.Top = m.Top + thickness; break; // top: the search bar must stay below it
+            case 2: _taskbarInset.Right = thickness; break;
+            default: _taskbarInset.Bottom = thickness; break;
         }
 
         RevealTaskbar();
@@ -566,12 +573,22 @@ internal sealed class OverviewWindow : Window
             _ => Math.Min(r.Bottom, m.Bottom) - Math.Max(r.Top, m.Top)
         };
         if (visible < _taskbarThickness - 2) RevealTaskbar();
+        else if (!Native.IsAbove(_autoHideTaskbar, _hwnd)) RaiseTaskbar();
     }
 
+    /// <summary>Slides the auto-hidden taskbar into view and puts it on top of the overview.</summary>
     void RevealTaskbar() =>
-        Native.SetWindowPos(_autoHideTaskbar, IntPtr.Zero, 0, 0, 0, 0,
-            Native.SWP_NOZORDER | Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE |
+        Native.SetWindowPos(_autoHideTaskbar, Native.HWND_TOPMOST, 0, 0, 0, 0,
+            Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE |
             Native.SWP_FRAMECHANGED | Native.SWP_SHOWWINDOW);
+
+    /// <summary>Puts the taskbar back above the overview (activating the overview puts it on top).</summary>
+    void RaiseTaskbar()
+    {
+        if (_autoHideTaskbar == IntPtr.Zero) return;
+        Native.SetWindowPos(_autoHideTaskbar, Native.HWND_TOPMOST, 0, 0, 0, 0,
+            Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE);
+    }
 
     void FinishHide()
     {
@@ -909,6 +926,8 @@ internal sealed class OverviewWindow : Window
         double usable = _mon.Width / _dpi - 2 * SideMargin;
         int cols = (int)Math.Clamp(Math.Floor(usable / (AppTileW + 8)), 3, 8);
         _gridPanel.Width = cols * (AppTileW + 8);
+        _gridHost.Margin = new Thickness(SideMargin + _taskbarInset.Left / _dpi, AppsTop,
+                                         SideMargin + _taskbarInset.Right / _dpi, BottomMargin + _taskbarInset.Bottom / _dpi);
         _gridHost.ScrollToTop();
         _gridHost.Visibility = Visibility.Visible;
 
@@ -1258,9 +1277,10 @@ internal sealed class OverviewWindow : Window
         double topDip = _apps.Count > 0 ? AppsTop + AppTileH + 24 : AppsTop + 6;
         // Keep the suggestion row reserved while searching, so windows don't jump when suggestions arrive.
         topDip += ChipReserve();
-        var area = new Rect(SideMargin * d, topDip * d,
-                            Math.Max(1, W - 2 * SideMargin * d),
-                            Math.Max(1, H - (topDip + BottomMargin) * d));
+        var inset = _taskbarInset;
+        var area = new Rect(SideMargin * d + inset.Left, topDip * d,
+                            Math.Max(1, W - 2 * SideMargin * d - inset.Left - inset.Right),
+                            Math.Max(1, H - (topDip + BottomMargin) * d - inset.Bottom));
 
         // In the app grid every window fades out of the way.
         var visible = _gridMode ? new List<Tile>() : _tiles.Where(t => t.Visible).ToList();
