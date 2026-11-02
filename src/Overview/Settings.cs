@@ -14,9 +14,7 @@ internal sealed class Settings
     public bool FirstRun { get; set; } = true;
     /// <summary>Chosen in the installer. Only installed copies check; the standalone exe never does.</summary>
     public bool CheckForUpdates { get; set; } = false;
-    /// <summary>Show an auto-hidden taskbar while the overview is open (pauses auto-hide meanwhile).</summary>
-    public bool ShowAutoHideTaskbar { get; set; } = true;
-    /// <summary>Set while auto-hide is paused, so it's switched back on if Overview exits unexpectedly.</summary>
+    /// <summary>Left over from 1.8.3, which paused taskbar auto-hide: if set, auto-hide is switched back on.</summary>
     public bool RestoreTaskbarAutoHide { get; set; }
     /// <summary>Version that last ran, so an update can say "Updated to x.y.z".</summary>
     public string? LastVersion { get; set; }

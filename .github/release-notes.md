@@ -1,7 +1,7 @@
-## What's new in 1.8.3
-- **Auto-hide taskbar now shows reliably.** Windows 11 ignored the old way of revealing an auto-hidden taskbar, so it only appeared when your mouse was already at the bottom of the screen. Overview now pauses auto-hide while it's open and switches it back on when it closes. Maximized windows make room for the taskbar meanwhile.
-- New tray option **Show auto-hidden taskbar in overview**, on by default. Turn it off if you'd rather keep auto-hide untouched.
-- If Overview ever exits while auto-hide is paused, it switches auto-hide back on at the next start.
+## What's new in 1.8.4
+- **Auto-hide taskbar: back to normal behavior, done properly.** 1.8.3 paused auto-hide while the overview was open, which was slow, resized windows and kicked fullscreen apps out of fullscreen. That's gone.
+- The overview no longer covers the taskbar's hover edge, so pointing at the bottom of the screen reliably slides the taskbar up on top of the overview.
+- If 1.8.3 left auto-hide switched off, it's switched back on.
 
 ## Download
 - **`Overview-Setup.exe`**: the installer. Choose *Start with Windows*, *Check for updates automatically* and *Desktop shortcut*. Installs for your user only, no admin needed. If you already have Overview installed with updates on, it will offer this version by itself.
