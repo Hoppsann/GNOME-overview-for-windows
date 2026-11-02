@@ -255,6 +255,19 @@ internal static class Native
         return ((uint)SHAppBarMessage(ABM_GETSTATE, ref d) & ABS_AUTOHIDE) != 0;
     }
 
+    /// <summary>Turns the taskbar's "automatically hide" setting on or off (the same switch as in Settings).</summary>
+    public static void SetTaskbarAutoHide(bool on)
+    {
+        const uint ABM_SETSTATE = 10, ABS_AUTOHIDE = 1, ABS_ALWAYSONTOP = 2;
+        var d = new APPBARDATA
+        {
+            cbSize = Marshal.SizeOf<APPBARDATA>(),
+            hWnd = FindWindowEx(IntPtr.Zero, IntPtr.Zero, "Shell_TrayWnd", null),
+            lParam = (IntPtr)(on ? ABS_AUTOHIDE : ABS_ALWAYSONTOP)
+        };
+        SHAppBarMessage(ABM_SETSTATE, ref d);
+    }
+
     /// <summary>True if <paramref name="top"/> is above <paramref name="other"/> in the z-order.</summary>
     public static bool IsAbove(IntPtr top, IntPtr other)
     {

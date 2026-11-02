@@ -220,6 +220,7 @@ internal static class Installer
         try
         {
             StopRunningCopies();
+            if (Settings.Load().RestoreTaskbarAutoHide) Native.SetTaskbarAutoHide(true); // was paused when killed
             if (AutoStartPointsHere()) AutoStart.Set(false);
             TryDelete(StartMenuLink);
             TryDelete(DesktopLink);

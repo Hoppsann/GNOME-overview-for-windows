@@ -63,9 +63,20 @@ public sealed class App : Application
             ex.Handled = true;
             _overview?.ForceHide();
         };
-        AppDomain.CurrentDomain.UnhandledException += (_, ex) => Log.Write(ex.ExceptionObject);
+        AppDomain.CurrentDomain.UnhandledException += (_, ex) =>
+        {
+            Log.Write(ex.ExceptionObject);
+            if (Settings.RestoreTaskbarAutoHide) Native.SetTaskbarAutoHide(true); // never leave it paused
+        };
 
         Settings = Settings.Load();
+        if (Settings.RestoreTaskbarAutoHide)
+        {
+            // Overview quit while it had taskbar auto-hide paused: switch it back on.
+            Native.SetTaskbarAutoHide(true);
+            Settings.RestoreTaskbarAutoHide = false;
+            Settings.Save();
+        }
         Mru.Start();
         AppCatalog.StartRefresh(); // also preloads every icon in the background
 
@@ -198,6 +209,14 @@ public sealed class App : Application
             Settings.Save();
         };
 
+        var taskbar = new Forms.ToolStripMenuItem("Show auto-hidden taskbar in overview") { Checked = Settings.ShowAutoHideTaskbar, CheckOnClick = true };
+        taskbar.ToolTipText = "If your taskbar auto-hides, it's shown while the overview is open (maximized windows make room meanwhile)";
+        taskbar.CheckedChanged += (_, _) =>
+        {
+            Settings.ShowAutoHideTaskbar = taskbar.Checked;
+            Settings.Save();
+        };
+
         var startup = new Forms.ToolStripMenuItem("Start with Windows") { Checked = AutoStart.IsEnabled(), CheckOnClick = true };
         startup.CheckedChanged += (_, _) => AutoStart.Set(startup.Checked);
 
@@ -207,7 +226,7 @@ public sealed class App : Application
         var version = new Forms.ToolStripMenuItem($"Overview {Updater.Current}") { Enabled = false };
         menu.Items.AddRange(new Forms.ToolStripItem[]
         {
-            open, version, new Forms.ToolStripSeparator(), superKey, corner, suggestions, startup
+            open, version, new Forms.ToolStripSeparator(), superKey, corner, suggestions, taskbar, startup
         });
 
         // Update options only for the installed copy (the standalone exe never updates itself).

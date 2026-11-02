@@ -113,6 +113,9 @@ Settings and a small log are stored in `%APPDATA%\Overview`.
 - Windows hides key presses from normal apps while an **admin window** has focus, so the Windows key
   opens Start there instead.
 - **Minimized windows** show their last frame, because Windows doesn't let them draw.
+- With taskbar **auto-hide** on, Windows 11 gives apps no way to show the taskbar, so Overview pauses
+  auto-hide while it's open. Maximized windows make room for the taskbar meanwhile. Turn this off in the
+  tray menu ("Show auto-hidden taskbar in overview").
 - The overview opens on the monitor your mouse is on.
 
 ## Build from source

@@ -482,7 +482,7 @@ internal sealed class OverviewWindow : Window
     {
         if (_state != State.Open) return;
         _state = State.Closing;
-        _taskbarTimer.Stop(); // Explorer hides an auto-hide taskbar again by itself
+        RestoreTaskbarAutoHide(); // the taskbar slides away while the overview animates out
         CloseMenu();
         foreach (var t in _tiles)
         {
@@ -518,16 +518,17 @@ internal sealed class OverviewWindow : Window
     DispatcherTimer _taskbarTimer = new() { Interval = TimeSpan.FromMilliseconds(250) };
 
     /// <summary>
-    /// If the taskbar is set to auto-hide, slide it into view while the overview is open and keep
-    /// the overview clear of it. Windows has no API for this; nudging the taskbar window with
-    /// SetWindowPos(SWP_SHOWWINDOW) makes Explorer show it, and a timer re-shows it if Explorer hides it.
+    /// If the taskbar is set to auto-hide, show it while the overview is open. Windows 11 has no way
+    /// for an app to reveal an auto-hidden taskbar (nudging the window only works on Windows 10), so
+    /// auto-hide is switched off while the overview is open and back on when it closes. Side effect:
+    /// maximized windows shrink to make room meanwhile. Can be turned off in the tray menu.
     /// </summary>
     void ShowAutoHideTaskbar(IntPtr monitor)
     {
         _autoHideTaskbar = IntPtr.Zero;
         _taskbarInset = new Thickness(0);
         _taskbarTimer.Stop();
-        if (!Native.IsTaskbarAutoHide()) return;
+        if (!App.Settings.ShowAutoHideTaskbar || !Native.IsTaskbarAutoHide()) return;
         var tb = Native.TaskbarOnMonitor(monitor);
         if (tb == IntPtr.Zero || !Native.GetWindowRect(tb, out var r)) return;
 
@@ -554,33 +555,60 @@ internal sealed class OverviewWindow : Window
             default: _taskbarInset.Bottom = thickness; break;
         }
 
-        RevealTaskbar();
+        // Remember the switch on disk first, so a crash can't leave auto-hide off for good.
+        App.Settings.RestoreTaskbarAutoHide = true;
+        App.Settings.Save();
+        Native.SetTaskbarAutoHide(false);
+        _autoHideSuspended = true;
+
         _taskbarTimer.Tick -= OnTaskbarTimer;
         _taskbarTimer.Tick += OnTaskbarTimer;
         _taskbarTimer.Start();
-        Log.Write($"auto-hide taskbar: edge {_taskbarEdge}, {thickness}px, shown");
+        Log.Write($"auto-hide taskbar: edge {_taskbarEdge}, {thickness}px, auto-hide paused");
+    }
+
+    bool _autoHideSuspended;
+
+    /// <summary>Switches auto-hide back on after the overview (no-op if it wasn't paused).</summary>
+    public void RestoreTaskbarAutoHide()
+    {
+        _taskbarTimer.Stop();
+        if (!_autoHideSuspended) return;
+        _autoHideSuspended = false;
+        Native.SetTaskbarAutoHide(true);
+        App.Settings.RestoreTaskbarAutoHide = false;
+        App.Settings.Save();
     }
 
     void OnTaskbarTimer(object? sender, EventArgs e)
     {
         if (_state != State.Open || _autoHideTaskbar == IntPtr.Zero) { _taskbarTimer.Stop(); return; }
-        if (!Native.GetWindowRect(_autoHideTaskbar, out var r)) return;
-        var m = _monFull;
-        int visible = _taskbarEdge switch
-        {
-            0 => Math.Min(r.Right, m.Right) - Math.Max(r.Left, m.Left),
-            2 => Math.Min(r.Right, m.Right) - Math.Max(r.Left, m.Left),
-            _ => Math.Min(r.Bottom, m.Bottom) - Math.Max(r.Top, m.Top)
-        };
-        if (visible < _taskbarThickness - 2) RevealTaskbar();
-        else if (!Native.IsAbove(_autoHideTaskbar, _hwnd)) RaiseTaskbar();
+        if (!Native.IsAbove(_autoHideTaskbar, _hwnd)) RaiseTaskbar();
+        // Maximized windows shrink when auto-hide pauses: keep their thumbnails cropped to the new size.
+        foreach (var t in _tiles)
+            if (RefreshCrop(t)) ApplyTile(t);
     }
 
-    /// <summary>Slides the auto-hidden taskbar into view and puts it on top of the overview.</summary>
-    void RevealTaskbar() =>
-        Native.SetWindowPos(_autoHideTaskbar, Native.HWND_TOPMOST, 0, 0, 0, 0,
-            Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE |
-            Native.SWP_FRAMECHANGED | Native.SWP_SHOWWINDOW);
+    /// <summary>Recomputes which part of the live thumbnail is the visible window (without the invisible
+    /// resize borders) from the window's current size. Returns true if it changed.</summary>
+    bool RefreshCrop(Tile t)
+    {
+        if (t.Thumb == IntPtr.Zero || t.Win.Minimized) return false;
+        var h = t.Win.Hwnd;
+        if (!Native.GetWindowRect(h, out var wr) || wr.Width <= 0 || wr.Height <= 0) return false;
+        if (Native.DwmGetWindowAttribute(h, Native.DWMWA_EXTENDED_FRAME_BOUNDS, out Native.RECT fr, Marshal.SizeOf<Native.RECT>()) != 0) fr = wr;
+        if (Native.DwmQueryThumbnailSourceSize(t.Thumb, out var src) != 0 || src.cx <= 0 || src.cy <= 0) return false;
+        double sx = src.cx / (double)wr.Width, sy = src.cy / (double)wr.Height;
+        var crop = new Native.RECT(
+            (int)Math.Round((fr.Left - wr.Left) * sx), (int)Math.Round((fr.Top - wr.Top) * sy),
+            (int)Math.Round((fr.Right - wr.Left) * sx), (int)Math.Round((fr.Bottom - wr.Top) * sy));
+        if (crop.Width <= 0 || crop.Height <= 0) return false;
+        if (t.HasCrop && crop.Left == t.Crop.Left && crop.Top == t.Crop.Top && crop.Right == t.Crop.Right && crop.Bottom == t.Crop.Bottom)
+            return false;
+        t.Crop = crop;
+        t.HasCrop = true;
+        return true;
+    }
 
     /// <summary>Puts the taskbar back above the overview (activating the overview puts it on top).</summary>
     void RaiseTaskbar()
@@ -594,6 +622,7 @@ internal sealed class OverviewWindow : Window
     {
         StopRendering();
         Hide();
+        RestoreTaskbarAutoHide(); // in case we got here without Dismiss (errors)
         Select(null); // also clears the highlight on a reused app-grid tile
         if (_gridMode) LeaveGrid();
         ClearChips();
