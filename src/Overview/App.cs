@@ -69,6 +69,10 @@ public sealed class App : Application
             if (Settings.RestoreTaskbarAutoHide) Native.SetTaskbarAutoHide(true); // never leave it paused
         };
 
+        // Avoid long full garbage collections: they pause every thread, including the keyboard hook,
+        // and a hook that pauses too long makes typing lag system-wide.
+        System.Runtime.GCSettings.LatencyMode = System.Runtime.GCLatencyMode.SustainedLowLatency;
+
         Settings = Settings.Load();
         if (Settings.RestoreTaskbarAutoHide)
         {
@@ -83,7 +87,7 @@ public sealed class App : Application
         _overview = new OverviewWindow();
         _overview.Prepare();
 
-        _hook = new KeyboardHook(Dispatcher, ToggleOverview) { Enabled = Settings.SuperKey };
+        _hook = new KeyboardHook(Dispatcher, OnWindowsKeyTap) { Enabled = Settings.SuperKey };
         _hook.Start();
 
         _hotCorner = new HotCorner(ToggleOverview) { Enabled = Settings.HotCorner };
@@ -171,6 +175,21 @@ public sealed class App : Application
         MessageBox.Show(text, "Overview", buttons, image,
             buttons == MessageBoxButton.YesNo ? MessageBoxResult.Yes : MessageBoxResult.OK,
             MessageBoxOptions.DefaultDesktopOnly);
+
+    /// <summary>
+    /// A Windows-key tap. Taps that waited too long (the app was busy) are dropped, so a stall
+    /// doesn't end with the overview flickering open and closed for every tap made meanwhile.
+    /// </summary>
+    void OnWindowsKeyTap(long tappedAt)
+    {
+        long waited = Environment.TickCount64 - tappedAt;
+        if (waited > 700)
+        {
+            Log.Write($"dropped a Windows-key tap that waited {waited} ms");
+            return;
+        }
+        ToggleOverview();
+    }
 
     void ToggleOverview()
     {

@@ -42,6 +42,7 @@ internal sealed class OverviewWindow : Window
         public Border Label = null!;
         public Border CloseButton = null!;
         public Image Placeholder = null!;
+        public Image LabelIcon = null!;
     }
 
     sealed class AppTile
@@ -423,7 +424,7 @@ internal sealed class OverviewWindow : Window
             ShowAutoHideTaskbar(monitor); // with auto-hide on, the work area is the whole screen: make room
             int mw = _mon.Width, mh = _mon.Height;
 
-            var items = WindowEnumerator.Enumerate(_hwnd);
+            var items = WindowEnumerator.Enumerate(_hwnd, loadIcons: false); // missing icons load async
 
             Native.SetWindowPos(_hwnd, Native.HWND_TOPMOST, _mon.Left, _mon.Top, mw, mh, Native.SWP_NOACTIVATE);
             UpdateBackground();
@@ -762,6 +763,20 @@ internal sealed class OverviewWindow : Window
 
         var icon = new Image { Source = t.Win.Icon, Width = 18, Height = 18, Margin = new Thickness(0, 0, 7, 0), VerticalAlignment = VerticalAlignment.Center };
         RenderOptions.SetBitmapScalingMode(icon, BitmapScalingMode.HighQuality);
+        t.LabelIcon = icon;
+        if (t.Win.Icon == null)
+        {
+            // Not cached yet: load it in the background and fill it in when it arrives.
+            var w = t.Win;
+            string key = "window|" + (w.Aumid ?? w.ExePath ?? w.Hwnd.ToString());
+            IconLoader.LoadAsync(key, () => WindowEnumerator.LoadIcon(w), loaded =>
+            {
+                if (loaded == null) return;
+                w.Icon = loaded;
+                t.Placeholder.Source = loaded;
+                t.LabelIcon.Source = loaded;
+            });
+        }
         var title = new TextBlock
         {
             Text = t.Win.Title,
@@ -1090,7 +1105,8 @@ internal sealed class OverviewWindow : Window
     void SearchChip(Chip chip)
     {
         if (_state != State.Open) return;
-        WebSearch.Run(chip.Text);
+        string text = chip.Text;
+        Launcher.Run(() => WebSearch.Run(text));
         Dismiss(null);
     }
 
@@ -1113,7 +1129,7 @@ internal sealed class OverviewWindow : Window
     void RunAndClose(Action action)
     {
         if (_state != State.Open) return;
-        action(); // while we're still foreground, so the new window may take focus
+        Launcher.Run(action); // never block the overview (UAC prompts, slow app starts)
         Dismiss(null);
     }
 
@@ -1191,24 +1207,32 @@ internal sealed class OverviewWindow : Window
 
     void CreateAppVisuals(AppTile a, Panel parent)
     {
-        var source = a.IsWeb ? WebSearch.BrowserIcon() : AppCatalog.Icon(a.App, 96);
-        FrameworkElement img;
-        if (source != null)
+        // The icon loads in the background the first time; a faint glyph shows until it arrives.
+        string? iconName = a.IsWeb ? WebSearch.BrowserExe() : AppCatalog.ParsingName(a.App);
+        var glyph = new TextBlock
         {
-            img = new Image { Source = source };
-            RenderOptions.SetBitmapScalingMode(img, BitmapScalingMode.HighQuality);
-        }
-        else
-        {
-            img = new TextBlock
+            Text = a.IsWeb ? "\uE774" : "\uE71D", // globe / generic app
+            FontFamily = IconFont,
+            FontSize = 36,
+            Foreground = TextBrush,
+            TextAlignment = TextAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            Opacity = 0.5
+        };
+        var image = new Image();
+        RenderOptions.SetBitmapScalingMode(image, BitmapScalingMode.HighQuality);
+        var iconBox = new Grid();
+        iconBox.Children.Add(glyph);
+        iconBox.Children.Add(image);
+        if (iconName != null)
+            IconLoader.GetAsync(iconName, 96, icon =>
             {
-                Text = a.IsWeb ? "" : "", // globe / generic app
-                FontFamily = IconFont,
-                FontSize = 36,
-                Foreground = TextBrush,
-                TextAlignment = TextAlignment.Center
-            };
-        }
+                image.Source = icon;
+                glyph.Visibility = icon != null ? Visibility.Collapsed : Visibility.Visible;
+                glyph.Opacity = 1;
+            });
+        else glyph.Opacity = 1;
+        FrameworkElement img = iconBox;
         img.Width = 52;
         img.Height = 52;
         img.Margin = new Thickness(0, 12, 0, 7);
@@ -1714,9 +1738,11 @@ internal sealed class OverviewWindow : Window
     void LaunchApp(AppTile a)
     {
         if (_state != State.Open) return;
-        // Launch while we're still foreground, so the new app or browser may take focus.
-        if (a.IsWeb) WebSearch.Run(_search.Text);
-        else AppCatalog.Launch(a.App);
+        // Started on another thread (Store apps can take seconds), allowed to take focus.
+        var app = a.App;
+        string query = _search.Text;
+        if (a.IsWeb) Launcher.Run(() => WebSearch.Run(query));
+        else Launcher.Run(() => AppCatalog.Launch(app));
         Dismiss(null);
     }
 

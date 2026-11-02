@@ -28,16 +28,21 @@ internal static class WebSearch
     const uint ASSOCF_IS_PROTOCOL = 0x1000, ASSOCF_NOTRUNCATE = 0x20;
     const int ASSOCSTR_COMMAND = 1, ASSOCSTR_EXECUTABLE = 2;
 
+    // Used from the UI, the icon preloader and launch threads, so guarded by a lock.
+    static readonly object CacheGate = new();
     static string? _cachedExe;
     static DateTime _cachedAt = DateTime.MinValue;
 
     /// <summary>The default browser's exe. Re-checked every few seconds, so changing the default takes effect almost at once.</summary>
     public static string? BrowserExe()
     {
-        if (DateTime.UtcNow - _cachedAt < TimeSpan.FromSeconds(5)) return _cachedExe;
-        _cachedExe = LookUpBrowserExe();
-        _cachedAt = DateTime.UtcNow;
-        return _cachedExe;
+        lock (CacheGate)
+        {
+            if (DateTime.UtcNow - _cachedAt < TimeSpan.FromSeconds(5)) return _cachedExe;
+            _cachedExe = LookUpBrowserExe();
+            _cachedAt = DateTime.UtcNow;
+            return _cachedExe;
+        }
     }
 
     static string? LookUpBrowserExe()

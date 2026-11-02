@@ -40,9 +40,18 @@ internal static class AppCatalog
         if (DateTime.UtcNow - _lastRefresh > TimeSpan.FromMinutes(2)) StartRefresh();
     }
 
+    static long _busySinceTicks;
+
     public static void StartRefresh()
     {
-        if (Interlocked.Exchange(ref _busy, 1) == 1) return;
+        if (Interlocked.Exchange(ref _busy, 1) == 1)
+        {
+            // A refresh is running. If it has hung in the shell for over a minute, give up on it
+            // (it can finish or not on its own) and start a fresh one, so icons keep preloading.
+            if (DateTime.UtcNow.Ticks - Interlocked.Read(ref _busySinceTicks) < TimeSpan.TicksPerMinute) return;
+            Log.Write("app list refresh seemed stuck, starting a new one");
+        }
+        Interlocked.Exchange(ref _busySinceTicks, DateTime.UtcNow.Ticks);
         _lastRefresh = DateTime.UtcNow;
         var t = new Thread(() =>
         {
@@ -67,6 +76,15 @@ internal static class AppCatalog
 
     static void Publish(List<AppEntry> list)
     {
+        // Same apps as before: keep the old list, so the app grid doesn't rebuild hundreds of tiles.
+        var old = _snap.Apps;
+        if (old.Count == list.Count)
+        {
+            bool same = true;
+            for (int i = 0; i < list.Count && same; i++)
+                same = old[i].Id == list[i].Id && old[i].Name == list[i].Name;
+            if (same) return;
+        }
         var snap = new Snapshot { Apps = list };
         foreach (var a in list) snap.NameById.TryAdd(a.Id, a.Name);
         _snap = snap;
@@ -78,7 +96,7 @@ internal static class AppCatalog
     /// </summary>
     static void Preload(List<AppEntry> list)
     {
-        try { WindowEnumerator.Enumerate(IntPtr.Zero); } // warms window icons + app descriptions
+        try { WindowEnumerator.Enumerate(IntPtr.Zero, loadIcons: true); } // warms window icons + app descriptions
         catch (Exception e) { Log.Write(e); }
         try { WebSearch.BrowserIcon(); } catch { }
         foreach (var a in list)

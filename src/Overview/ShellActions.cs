@@ -71,7 +71,22 @@ internal static class ShellActions
         }
     }
 
+    static readonly System.Collections.Concurrent.ConcurrentDictionary<string, (string? Path, DateTime At)> ShortcutCache =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Searches the Start Menu folders for "name.lnk". Cached for 10 minutes: the search
+    /// walks every folder and runs when the right-click menu opens.</summary>
     static string? FindShortcut(string name)
+    {
+        if (ShortcutCache.TryGetValue(name, out var hit) && DateTime.UtcNow - hit.At < TimeSpan.FromMinutes(10)
+            && (hit.Path == null || File.Exists(hit.Path)))
+            return hit.Path;
+        var found = SearchStartMenu(name);
+        ShortcutCache[name] = (found, DateTime.UtcNow);
+        return found;
+    }
+
+    static string? SearchStartMenu(string name)
     {
         string file = name + ".lnk";
         foreach (var root in new[]

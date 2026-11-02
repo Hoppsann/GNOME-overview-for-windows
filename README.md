@@ -149,6 +149,7 @@ updates turned on pick it up from there.
 | `Search.cs` | Fuzzy matching: prefix, word start, acronym, substring |
 | `WebSearch.cs` / `WebSuggest.cs` | Default-browser web search and search suggestions |
 | `ShellActions.cs` | Right-click actions: run as admin, file location, properties |
+| `Launcher.cs` | Starts apps, folders and searches on a separate thread so the overview never freezes |
 | `Mru.cs` | Most-recently-used window order for the Alt+Tab-style switching |
 | `HotCorner.cs` | Optional top-left hot corner |
 | `Installer.cs` / `SetupWindow.cs` | Setup wizard, install, update and uninstall |

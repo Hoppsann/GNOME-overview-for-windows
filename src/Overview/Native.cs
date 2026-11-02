@@ -311,27 +311,38 @@ internal static class Native
         SendInput(2, inputs, Marshal.SizeOf<INPUT>());
     }
 
-    /// <summary>Injects: mask key down, mask key up, Win key up. Returns true if all three were sent.</summary>
-    public static bool SendMaskedWinRelease(uint winVk)
+    [DllImport("user32.dll")] public static extern bool IsHungAppWindow(IntPtr h);
+    [DllImport("user32.dll")] public static extern bool AllowSetForegroundWindow(int processId);
+    public const int ASFW_ANY = -1;
+
+    static void SendKey(uint vk, bool up)
     {
-        var inputs = new INPUT[3];
-        for (int i = 0; i < 3; i++) inputs[i].type = INPUT_KEYBOARD;
-        inputs[0].u.ki.wVk = (ushort)VK_MASK;
-        inputs[1].u.ki.wVk = (ushort)VK_MASK;
-        inputs[1].u.ki.dwFlags = KEYEVENTF_KEYUP;
-        inputs[2].u.ki.wVk = (ushort)winVk;
-        inputs[2].u.ki.dwFlags = KEYEVENTF_KEYUP | KEYEVENTF_EXTENDEDKEY;
-        return SendInput(3, inputs, Marshal.SizeOf<INPUT>()) == 3;
+        var inputs = new INPUT[1];
+        inputs[0].type = INPUT_KEYBOARD;
+        inputs[0].u.ki.wVk = (ushort)vk;
+        if (up) inputs[0].u.ki.dwFlags = KEYEVENTF_KEYUP;
+        SendInput(1, inputs, Marshal.SizeOf<INPUT>());
     }
 
     /// <summary>Bring a window to the foreground even when Windows' foreground lock would refuse.</summary>
     public static void ForceForeground(IntPtr h)
     {
-        var fg = GetForegroundWindow();
-        if (fg == h) return;
+        if (GetForegroundWindow() == h) return;
+        if (SetForegroundWindow(h) && GetForegroundWindow() == h) return;
 
+        // Holding Alt lifts the foreground lock. Alt is released only after the switch, so the
+        // release goes to the new window and doesn't open the old app's menu bar.
+        SendKey(VK_MENU, up: false);
+        try { SetForegroundWindow(h); }
+        finally { SendKey(VK_MENU, up: true); }
+        if (GetForegroundWindow() == h) return;
+
+        // Last resort: share input state with the foreground app for a moment. Never with an app
+        // that's not responding: attaching to a hung thread can freeze this one too.
+        var fg = GetForegroundWindow();
+        if (fg == IntPtr.Zero || IsHungAppWindow(fg)) return;
         uint me = GetCurrentThreadId();
-        uint fgThread = fg != IntPtr.Zero ? GetWindowThreadProcessId(fg, out _) : 0;
+        uint fgThread = GetWindowThreadProcessId(fg, out _);
         bool attached = fgThread != 0 && fgThread != me && AttachThreadInput(me, fgThread, true);
         try
         {
@@ -341,13 +352,6 @@ internal static class Native
         finally
         {
             if (attached) AttachThreadInput(me, fgThread, false);
-        }
-
-        if (GetForegroundWindow() != h)
-        {
-            // Last resort: a synthetic Alt tap lifts the foreground lock.
-            SendKeyTap(VK_MENU);
-            SetForegroundWindow(h);
         }
     }
 

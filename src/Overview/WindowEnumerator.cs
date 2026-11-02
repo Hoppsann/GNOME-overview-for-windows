@@ -37,7 +37,9 @@ internal static class WindowEnumerator
         "Windows.UI.Core.CoreWindow", "XamlExplorerHostIslandWindow", "TopLevelWindowForOverflowXamlIsland"
     };
 
-    public static List<WinItem> Enumerate(IntPtr exclude)
+    /// <param name="loadIcons">True on background threads (loads missing icons now); the UI passes
+    /// false and only gets icons that are already cached. The rest: <see cref="LoadIcon"/>, async.</param>
+    public static List<WinItem> Enumerate(IntPtr exclude, bool loadIcons)
     {
         var handles = new List<IntPtr>();
         Native.EnumWindows((h, _) => { handles.Add(h); return true; }, IntPtr.Zero);
@@ -47,7 +49,7 @@ internal static class WindowEnumerator
         {
             try
             {
-                var w = TryCreate(h, exclude);
+                var w = TryCreate(h, exclude, loadIcons);
                 if (w != null) list.Add(w);
             }
             catch (Exception e) { Log.Write(e); }
@@ -55,7 +57,7 @@ internal static class WindowEnumerator
         return list;
     }
 
-    static WinItem? TryCreate(IntPtr h, IntPtr exclude)
+    static WinItem? TryCreate(IntPtr h, IntPtr exclude, bool loadIcons)
     {
         if (h == exclude || !Native.IsWindowVisible(h)) return null;
 
@@ -113,10 +115,23 @@ internal static class WindowEnumerator
                     ?? Description(w.ExePath)
                     ?? w.ProcName;
 
-        w.Icon = (w.Aumid != null ? IconLoader.ForParsingName(@"shell:AppsFolder\" + w.Aumid, 48) : null)
-                 ?? (w.ExePath != null ? IconLoader.ForParsingName(w.ExePath, 48) : null)
-                 ?? IconLoader.FromWindow(h);
+        w.Icon = loadIcons ? LoadIcon(w) : CachedIcon(w);
         return w;
+    }
+
+    /// <summary>The window's icon: its Store app's, else its exe's, else the one the window reports.
+    /// Can be slow the first time: call it off the UI thread.</summary>
+    public static ImageSource? LoadIcon(WinItem w) =>
+        (w.Aumid != null ? IconLoader.ForParsingName(@"shell:AppsFolder\" + w.Aumid, 48) : null)
+        ?? (w.ExePath != null ? IconLoader.ForParsingName(w.ExePath, 48) : null)
+        ?? IconLoader.FromWindow(w.Hwnd);
+
+    /// <summary>Only what's already cached (instant); null if the icon still needs loading.</summary>
+    public static ImageSource? CachedIcon(WinItem w)
+    {
+        if (w.Aumid != null && IconLoader.TryGetCached(@"shell:AppsFolder\" + w.Aumid, 48, out var a) && a != null) return a;
+        if (w.ExePath != null && IconLoader.TryGetCached(w.ExePath, 48, out var e) && e != null) return e;
+        return null;
     }
 
     static (string? path, string? aumid) ProcessInfo(uint pid)

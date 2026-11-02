@@ -6,15 +6,24 @@ using System.Windows.Threading;
 namespace Overview;
 
 /// <summary>
-/// Detects a lone tap of the Windows (Super) key with a low-level keyboard hook.
-/// When enabled, it masks the tap (like AutoHotkey's vkE8 trick) so the Start menu
-/// doesn't open, and calls <c>onTap</c> instead. Win+anything shortcuts keep working.
-/// The hook runs on its own thread so a busy UI can never lag system-wide typing.
+/// Detects a lone tap of the Windows (Super) key with a low-level keyboard hook and calls
+/// <c>onTap</c>. To keep the Start menu closed it uses AutoHotkey's trick: right after the Windows
+/// key goes down, an unassigned key (vkE8) is pressed, and Windows doesn't open Start when another
+/// key happened between Windows-down and Windows-up. Win+anything shortcuts keep working.
+///
+/// Real key events are never blocked, so the Windows key can't get stuck "held down" (which made
+/// every key act as a Win+ shortcut when Windows silently dropped injected keys, e.g. while an
+/// admin window had focus). The hook runs on its own thread and returns at once, so a busy UI can
+/// never lag system-wide typing.
 /// </summary>
 internal sealed class KeyboardHook
 {
+    const uint WM_APP_MASK = 0x8001;   // posted to the hook thread: send the vkE8 mask now
+    const uint WM_APP_REARM = 0x8002;  // posted by the timer: reinstall the hook
+    const uint WM_TIMER = 0x0113;
+
     readonly Dispatcher _ui;
-    readonly Action _onTap;
+    readonly Action<long> _onTap;
     Thread? _thread;
     uint _threadId;
     IntPtr _hook;
@@ -22,10 +31,13 @@ internal sealed class KeyboardHook
 
     public volatile bool Enabled = true;
 
-    bool _winDown, _otherKey;
+    bool _winDown, _otherKey, _maskSent;
     uint _winVk, _lastWinTime;
 
-    public KeyboardHook(Dispatcher ui, Action onTap)
+    [DllImport("user32.dll")] static extern UIntPtr SetTimer(IntPtr hwnd, UIntPtr id, uint ms, IntPtr proc);
+
+    /// <param name="onTap">Called on the UI thread with the tick count when the tap happened.</param>
+    public KeyboardHook(Dispatcher ui, Action<long> onTap)
     {
         _ui = ui;
         _onTap = onTap;
@@ -46,38 +58,60 @@ internal sealed class KeyboardHook
     {
         _threadId = Native.GetCurrentThreadId();
         _proc = Callback;
-        _hook = Native.SetWindowsHookEx(Native.WH_KEYBOARD_LL, _proc, Native.GetModuleHandle(null), 0);
-        if (_hook == IntPtr.Zero)
-        {
-            Log.Write("SetWindowsHookEx failed: " + Marshal.GetLastWin32Error());
-            return;
-        }
+        if (!Install()) return;
+        // Windows silently removes a low-level hook if it ever responds too slowly (e.g. the PC was
+        // overloaded), and the Windows key would stop working. Reinstall it every 10 minutes.
+        SetTimer(IntPtr.Zero, UIntPtr.Zero, 10 * 60 * 1000, IntPtr.Zero);
+
         while (Native.GetMessage(out var msg, IntPtr.Zero, 0, 0) > 0)
         {
-            Native.TranslateMessage(ref msg);
-            Native.DispatchMessage(ref msg);
+            switch (msg.message)
+            {
+                case WM_APP_MASK:
+                    if (_winDown && !_maskSent)
+                    {
+                        Native.SendKeyTap(Native.VK_MASK);
+                        _maskSent = true;
+                    }
+                    break;
+                case WM_TIMER:
+                case WM_APP_REARM:
+                    if (!_winDown) // never in the middle of a key press
+                    {
+                        Native.UnhookWindowsHookEx(_hook);
+                        Install();
+                    }
+                    break;
+                default:
+                    Native.TranslateMessage(ref msg);
+                    Native.DispatchMessage(ref msg);
+                    break;
+            }
         }
         Native.UnhookWindowsHookEx(_hook);
+    }
+
+    bool Install()
+    {
+        _hook = Native.SetWindowsHookEx(Native.WH_KEYBOARD_LL, _proc!, Native.GetModuleHandle(null), 0);
+        if (_hook == IntPtr.Zero) Log.Write("SetWindowsHookEx failed: " + Marshal.GetLastWin32Error());
+        return _hook != IntPtr.Zero;
     }
 
     IntPtr Callback(int nCode, IntPtr wParam, IntPtr lParam)
     {
         if (nCode >= 0)
         {
-            try
-            {
-                if (Handle((int)wParam, Marshal.PtrToStructure<Native.KBDLLHOOKSTRUCT>(lParam)))
-                    return (IntPtr)1; // swallow this event
-            }
+            try { Handle((int)wParam, Marshal.PtrToStructure<Native.KBDLLHOOKSTRUCT>(lParam)); }
             catch { /* never let an exception escape a hook */ }
         }
+        // Always pass the key on: blocking real key events is what could leave the Windows key stuck.
         return Native.CallNextHookEx(_hook, nCode, wParam, lParam);
     }
 
-    /// <returns>true to swallow the event.</returns>
-    bool Handle(int msg, Native.KBDLLHOOKSTRUCT k)
+    void Handle(int msg, Native.KBDLLHOOKSTRUCT k)
     {
-        if ((k.flags & Native.LLKHF_INJECTED) != 0) return false; // ignore our own (and other tools') synthetic keys
+        if ((k.flags & Native.LLKHF_INJECTED) != 0) return; // ignore our own (and other tools') synthetic keys
 
         bool down = msg is Native.WM_KEYDOWN or Native.WM_SYSKEYDOWN;
         bool up = msg is Native.WM_KEYUP or Native.WM_SYSKEYUP;
@@ -96,6 +130,10 @@ internal sealed class KeyboardHook
                     _winDown = true;
                     _winVk = k.vkCode;
                     _otherKey = false;
+                    _maskSent = false;
+                    // Send the mask key *after* this callback returns, so it lands after Windows-down.
+                    // (Sent from inside the callback it would arrive before it, and Start would open.)
+                    if (Enabled) Native.PostThreadMessage(_threadId, WM_APP_MASK, IntPtr.Zero, IntPtr.Zero);
                 }
             }
             else if (up)
@@ -104,12 +142,8 @@ internal sealed class KeyboardHook
                 _winDown = false;
                 if (tap && Enabled)
                 {
-                    _ui.InvokeAsync(_onTap);
-                    // Replace the real release with "dummy key, release". Windows only opens Start
-                    // when nothing happened between Win down and Win up, so Start stays closed.
-                    // vkE8 is unassigned, so the dummy key has no other effect. If injecting
-                    // fails, let the real release through so the Win key can never get stuck.
-                    return Native.SendMaskedWinRelease(k.vkCode);
+                    long now = Environment.TickCount64;
+                    _ui.InvokeAsync(() => _onTap(now));
                 }
             }
         }
@@ -117,6 +151,5 @@ internal sealed class KeyboardHook
         {
             _otherKey = true; // Win+E, Win+Shift+S, ... -> not a tap
         }
-        return false;
     }
 }
