@@ -232,6 +232,43 @@ internal static class Native
         return mi.rcMonitor;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    struct APPBARDATA
+    {
+        public int cbSize;
+        public IntPtr hWnd;
+        public uint uCallbackMessage, uEdge;
+        public RECT rc;
+        public IntPtr lParam;
+    }
+
+    [DllImport("shell32.dll")] static extern UIntPtr SHAppBarMessage(uint msg, ref APPBARDATA data);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    static extern IntPtr FindWindowEx(IntPtr parent, IntPtr after, string cls, string? title);
+
+    public const uint SWP_FRAMECHANGED = 0x0020, SWP_SHOWWINDOW = 0x0040, SWP_NOSIZE = 0x0001, SWP_NOMOVE = 0x0002;
+
+    public static bool IsTaskbarAutoHide()
+    {
+        var d = new APPBARDATA { cbSize = Marshal.SizeOf<APPBARDATA>() };
+        const uint ABM_GETSTATE = 4, ABS_AUTOHIDE = 1;
+        return ((uint)SHAppBarMessage(ABM_GETSTATE, ref d) & ABS_AUTOHIDE) != 0;
+    }
+
+    /// <summary>The taskbar on a monitor: the main one, or a secondary one if "show on all displays" is on.</summary>
+    public static IntPtr TaskbarOnMonitor(IntPtr monitor)
+    {
+        var main = FindWindowEx(IntPtr.Zero, IntPtr.Zero, "Shell_TrayWnd", null);
+        if (main != IntPtr.Zero && MonitorFromWindow(main, MONITOR_DEFAULTTONEAREST) == monitor) return main;
+        for (IntPtr w = FindWindowEx(IntPtr.Zero, IntPtr.Zero, "Shell_SecondaryTrayWnd", null);
+             w != IntPtr.Zero;
+             w = FindWindowEx(IntPtr.Zero, w, "Shell_SecondaryTrayWnd", null))
+        {
+            if (MonitorFromWindow(w, MONITOR_DEFAULTTONEAREST) == monitor) return w;
+        }
+        return IntPtr.Zero;
+    }
+
     /// <summary>The monitor minus the taskbar (and any other docked bars).</summary>
     public static RECT MonitorWorkRect(IntPtr mon)
     {

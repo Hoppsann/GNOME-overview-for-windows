@@ -420,6 +420,7 @@ internal sealed class OverviewWindow : Window
             // Cover only the work area, so the taskbar stays visible and clickable.
             _mon = Native.MonitorWorkRect(monitor);
             if (_mon.Width <= 0 || _mon.Height <= 0) _mon = _monFull;
+            ShowAutoHideTaskbar(monitor); // with auto-hide on, the work area is the whole screen: make room
             int mw = _mon.Width, mh = _mon.Height;
 
             var items = WindowEnumerator.Enumerate(_hwnd);
@@ -480,6 +481,7 @@ internal sealed class OverviewWindow : Window
     {
         if (_state != State.Open) return;
         _state = State.Closing;
+        _taskbarTimer.Stop(); // Explorer hides an auto-hide taskbar again by itself
         CloseMenu();
         foreach (var t in _tiles)
         {
@@ -505,6 +507,71 @@ internal sealed class OverviewWindow : Window
         ApplyTile(t);
         Native.DwmUnregisterThumbnail(old);
     }
+
+    // ------------------------------------------------------------------ auto-hide taskbar
+
+    IntPtr _autoHideTaskbar;
+    int _taskbarEdge;      // 0 left, 1 top, 2 right, 3 bottom
+    int _taskbarThickness; // physical pixels
+    DispatcherTimer _taskbarTimer = new() { Interval = TimeSpan.FromMilliseconds(250) };
+
+    /// <summary>
+    /// If the taskbar is set to auto-hide, slide it into view while the overview is open and keep
+    /// the overview clear of it. Windows has no API for this; nudging the taskbar window with
+    /// SetWindowPos(SWP_SHOWWINDOW) makes Explorer show it, and a timer re-shows it if Explorer hides it.
+    /// </summary>
+    void ShowAutoHideTaskbar(IntPtr monitor)
+    {
+        _autoHideTaskbar = IntPtr.Zero;
+        _taskbarTimer.Stop();
+        if (!Native.IsTaskbarAutoHide()) return;
+        var tb = Native.TaskbarOnMonitor(monitor);
+        if (tb == IntPtr.Zero || !Native.GetWindowRect(tb, out var r)) return;
+
+        var m = _monFull;
+        bool horizontal = r.Width >= r.Height;
+        int thickness = horizontal ? r.Height : r.Width;
+        if (thickness <= 0 || thickness > (horizontal ? m.Height : m.Width) / 3) return;
+        // A hidden taskbar sits just past its screen edge, so its centre tells which edge that is.
+        _taskbarEdge = horizontal
+            ? ((r.Top + r.Bottom) / 2 > (m.Top + m.Bottom) / 2 ? 3 : 1)
+            : ((r.Left + r.Right) / 2 > (m.Left + m.Right) / 2 ? 2 : 0);
+        _taskbarThickness = thickness;
+        _autoHideTaskbar = tb;
+
+        switch (_taskbarEdge)
+        {
+            case 0: _mon.Left = Math.Max(_mon.Left, m.Left + thickness); break;
+            case 1: _mon.Top = Math.Max(_mon.Top, m.Top + thickness); break;
+            case 2: _mon.Right = Math.Min(_mon.Right, m.Right - thickness); break;
+            default: _mon.Bottom = Math.Min(_mon.Bottom, m.Bottom - thickness); break;
+        }
+
+        RevealTaskbar();
+        _taskbarTimer.Tick -= OnTaskbarTimer;
+        _taskbarTimer.Tick += OnTaskbarTimer;
+        _taskbarTimer.Start();
+        Log.Write($"auto-hide taskbar: edge {_taskbarEdge}, {thickness}px, shown");
+    }
+
+    void OnTaskbarTimer(object? sender, EventArgs e)
+    {
+        if (_state != State.Open || _autoHideTaskbar == IntPtr.Zero) { _taskbarTimer.Stop(); return; }
+        if (!Native.GetWindowRect(_autoHideTaskbar, out var r)) return;
+        var m = _monFull;
+        int visible = _taskbarEdge switch
+        {
+            0 => Math.Min(r.Right, m.Right) - Math.Max(r.Left, m.Left),
+            2 => Math.Min(r.Right, m.Right) - Math.Max(r.Left, m.Left),
+            _ => Math.Min(r.Bottom, m.Bottom) - Math.Max(r.Top, m.Top)
+        };
+        if (visible < _taskbarThickness - 2) RevealTaskbar();
+    }
+
+    void RevealTaskbar() =>
+        Native.SetWindowPos(_autoHideTaskbar, IntPtr.Zero, 0, 0, 0, 0,
+            Native.SWP_NOZORDER | Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE |
+            Native.SWP_FRAMECHANGED | Native.SWP_SHOWWINDOW);
 
     void FinishHide()
     {
