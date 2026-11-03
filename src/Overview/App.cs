@@ -15,6 +15,9 @@ public sealed class App : Application
     static Mutex? _instanceMutex;
     static EventWaitHandle? _showEvent;
     static EventWaitHandle? _quitEvent;
+    static EventWaitHandle? _settingsEvent;
+    static bool _openSettingsAtStart;
+    const string SettingsEventName = @"Local\Hoppsann.Overview.Settings";
 
     internal static Settings Settings = new();
 
@@ -35,14 +38,18 @@ public sealed class App : Application
             return setup.Run(new SetupWindow());
         }
 
+        bool openSettings = HasArg(args, "--settings");
         _instanceMutex = new Mutex(true, @"Local\Hoppsann.Overview.Instance", out bool first);
         if (!first)
         {
-            // Already running: launching it again opens the overview instead.
-            try { using var ev = EventWaitHandle.OpenExisting(@"Local\Hoppsann.Overview.Show"); ev.Set(); }
+            // Already running: launching it again opens the overview (or Settings, with --settings).
+            string name = openSettings ? SettingsEventName : @"Local\Hoppsann.Overview.Show";
+            try { using var ev = EventWaitHandle.OpenExisting(name); ev.Set(); }
             catch { }
             return 0;
         }
+        _openSettingsAtStart = openSettings;
+        _settingsEvent = new EventWaitHandle(false, EventResetMode.AutoReset, SettingsEventName);
         _showEvent = new EventWaitHandle(false, EventResetMode.AutoReset, @"Local\Hoppsann.Overview.Show");
         _quitEvent = new EventWaitHandle(false, EventResetMode.AutoReset, Installer.QuitEventName);
 
@@ -97,8 +104,10 @@ public sealed class App : Application
         ThreadPool.RegisterWaitForSingleObject(_showEvent!, (_, _) => Dispatcher.InvokeAsync(ToggleOverview), null, -1, false);
         // The installer asks a running copy to quit before replacing it.
         ThreadPool.RegisterWaitForSingleObject(_quitEvent!, (_, _) => Dispatcher.InvokeAsync(Quit), null, -1, true);
+        ThreadPool.RegisterWaitForSingleObject(_settingsEvent!, (_, _) => Dispatcher.InvokeAsync(SettingsWindow.ShowSingle), null, -1, false);
 
         CreateTray();
+        if (_openSettingsAtStart) Dispatcher.BeginInvoke(DispatcherPriority.Background, SettingsWindow.ShowSingle);
 
         Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, () =>
         {
@@ -210,40 +219,46 @@ public sealed class App : Application
         catch (Exception e) { Log.Write(e); _overview?.ForceHide(); }
     }
 
+    /// <summary>Applies settings changed in the Settings window that need more than a re-read.</summary>
+    internal void ApplySettings()
+    {
+        if (_hook != null) _hook.Enabled = Settings.SuperKey;
+        if (_hotCorner != null) _hotCorner.Enabled = Settings.HotCorner;
+    }
+
+    internal void CheckForUpdatesNow() => _ = CheckForUpdatesAsync(manual: true);
+
     void CreateTray()
     {
         Forms.Application.EnableVisualStyles();
+        bool syncing = false; // true while the menu is updated to match the settings (not a user click)
 
         var open = new Forms.ToolStripMenuItem("Open overview", null, (_, _) => Dispatcher.InvokeAsync(ToggleOverview));
         open.Font = new Drawing.Font(open.Font, Drawing.FontStyle.Bold);
+        var settings = new Forms.ToolStripMenuItem("Settings…", null, (_, _) => Dispatcher.InvokeAsync(SettingsWindow.ShowSingle));
 
         var superKey = new Forms.ToolStripMenuItem("Tap Windows key to open") { Checked = Settings.SuperKey, CheckOnClick = true };
         superKey.CheckedChanged += (_, _) =>
         {
+            if (syncing) return;
             Settings.SuperKey = superKey.Checked;
-            if (_hook != null) _hook.Enabled = superKey.Checked;
+            ApplySettings();
             Settings.Save();
         };
 
         var corner = new Forms.ToolStripMenuItem("Hot corner (top-left)") { Checked = Settings.HotCorner, CheckOnClick = true };
         corner.CheckedChanged += (_, _) =>
         {
+            if (syncing) return;
             Settings.HotCorner = corner.Checked;
-            if (_hotCorner != null) _hotCorner.Enabled = corner.Checked;
-            Settings.Save();
-        };
-
-        var suggestions = new Forms.ToolStripMenuItem("Web search suggestions") { Checked = Settings.WebSuggestions, CheckOnClick = true };
-        suggestions.ToolTipText = "Shows your search engine's suggestions while you type (sends what you type to it)";
-        suggestions.CheckedChanged += (_, _) =>
-        {
-            Settings.WebSuggestions = suggestions.Checked;
+            ApplySettings();
             Settings.Save();
         };
 
         var startup = new Forms.ToolStripMenuItem("Start with Windows") { Checked = AutoStart.IsEnabled(), CheckOnClick = true };
         startup.CheckedChanged += (_, _) =>
         {
+            if (syncing) return;
             bool on = startup.Checked;
             ThreadPool.QueueUserWorkItem(_ => AutoStart.Set(on)); // runs schtasks: keep it off the UI thread
         };
@@ -254,26 +269,32 @@ public sealed class App : Application
         var version = new Forms.ToolStripMenuItem($"Overview {Updater.Current}") { Enabled = false };
         menu.Items.AddRange(new Forms.ToolStripItem[]
         {
-            open, version, new Forms.ToolStripSeparator(), superKey, corner, suggestions, startup
+            open, settings, version, new Forms.ToolStripSeparator(), superKey, corner, startup
         });
 
         // Update options only for the installed copy (the standalone exe never updates itself).
         if (Installer.IsInstalledCopy)
         {
-            var autoUpdate = new Forms.ToolStripMenuItem("Check for updates automatically") { Checked = Settings.CheckForUpdates, CheckOnClick = true };
-            autoUpdate.CheckedChanged += (_, _) =>
-            {
-                Settings.CheckForUpdates = autoUpdate.Checked;
-                Settings.Save();
-            };
-            var checkNow = new Forms.ToolStripMenuItem("Check for updates now", null, (_, _) => Dispatcher.InvokeAsync(() => CheckForUpdatesAsync(manual: true)));
+            var checkNow = new Forms.ToolStripMenuItem("Check for updates now", null, (_, _) => Dispatcher.InvokeAsync(CheckForUpdatesNow));
             menu.Items.Add(new Forms.ToolStripSeparator());
-            menu.Items.Add(autoUpdate);
             menu.Items.Add(checkNow);
         }
 
         menu.Items.Add(new Forms.ToolStripSeparator());
         menu.Items.Add(quit);
+
+        // Settings can change in the Settings window: show the current state each time the menu opens.
+        menu.Opening += (_, _) =>
+        {
+            syncing = true;
+            try
+            {
+                superKey.Checked = Settings.SuperKey;
+                corner.Checked = Settings.HotCorner;
+                startup.Checked = AutoStart.IsEnabled();
+            }
+            finally { syncing = false; }
+        };
 
         _tray = new Forms.NotifyIcon
         {

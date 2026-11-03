@@ -35,6 +35,9 @@ internal static class Installer
     static string StartMenuLink =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs), "Overview.lnk");
 
+    static string SettingsLink =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs), "Overview Settings.lnk");
+
     static string DesktopLink =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "Overview.lnk");
 
@@ -67,6 +70,7 @@ internal static class Installer
         if (!SamePath(self, InstalledExe)) CopyWithRetry(self, InstalledExe);
 
         CreateShortcut(StartMenuLink, InstalledExe);
+        CreateShortcut(SettingsLink, InstalledExe, "--settings", "Change Overview's settings");
         if (o.DesktopShortcut) CreateShortcut(DesktopLink, InstalledExe);
         else TryDelete(DesktopLink);
 
@@ -165,7 +169,8 @@ internal static class Installer
         return list;
     }
 
-    static void CreateShortcut(string linkPath, string target)
+    static void CreateShortcut(string linkPath, string target, string arguments = "",
+                               string description = "GNOME-style Activities overview for Windows")
     {
         object? shell = null, link = null;
         try
@@ -178,7 +183,8 @@ internal static class Installer
             l.TargetPath = target;
             l.WorkingDirectory = Path.GetDirectoryName(target);
             l.IconLocation = target + ",0";
-            l.Description = "GNOME-style Activities overview for Windows";
+            l.Arguments = arguments;
+            l.Description = description;
             l.Save();
         }
         catch (Exception e) { Log.Write($"shortcut {linkPath}: {e.Message}"); }
@@ -223,6 +229,7 @@ internal static class Installer
             if (Settings.Load().RestoreTaskbarAutoHide) Native.SetTaskbarAutoHide(true); // was paused when killed
             if (AutoStart.PointsInto(InstallDir)) AutoStart.Set(false);
             TryDelete(StartMenuLink);
+            TryDelete(SettingsLink);
             TryDelete(DesktopLink);
             Registry.CurrentUser.DeleteSubKeyTree(UninstallKey, throwOnMissingSubKey: false);
             try { Directory.Delete(Settings.DataDir, recursive: true); } catch { }

@@ -82,7 +82,7 @@ internal sealed class OverviewWindow : Window
     const double AppTileW = 104, AppTileH = 108, AppGap = 6;
     const double SideMargin = 56, BottomMargin = 36, Spacing = 34, LabelSpace = 40, RingPad = 5;
     const double OpenMs = 240, CloseMs = 180, FilterMs = 160;
-    const int MaxAppResults = 8;
+    static int MaxAppResults => Math.Clamp(App.Settings.MaxAppResults, 3, 12) + 1; // + the web search tile
 
     static readonly Brush TextBrush = Frozen(Color.FromArgb(0xF2, 0xFF, 0xFF, 0xFF));
     static readonly Brush DimTextBrush = Frozen(Color.FromArgb(0x99, 0xFF, 0xFF, 0xFF));
@@ -109,6 +109,7 @@ internal sealed class OverviewWindow : Window
     Tile? _activating;      // set while handing focus to a chosen window
 
     readonly Grid _root;
+    readonly Border _dim;
     readonly Image _bg;
     readonly Canvas _stage;
     readonly Border _searchBorder;
@@ -158,7 +159,7 @@ internal sealed class OverviewWindow : Window
         _bg = new Image { Stretch = Stretch.UniformToFill, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
         RenderOptions.SetBitmapScalingMode(_bg, BitmapScalingMode.Linear);
 
-        var dim = new Border { Background = Frozen(Color.FromArgb(0x5C, 0, 0, 0)) };
+        _dim = new Border { Background = Frozen(Color.FromArgb(0x5C, 0, 0, 0)) };
 
         _stage = new Canvas { Background = Brushes.Transparent, ClipToBounds = true };
         _stage.MouseLeftButtonUp += (_, e) =>
@@ -288,7 +289,7 @@ internal sealed class OverviewWindow : Window
 
         _root = new Grid { Background = Frozen(Color.FromRgb(0x1C, 0x1C, 0x1C)) };
         _root.Children.Add(_bg);
-        _root.Children.Add(dim);
+        _root.Children.Add(_dim);
         _root.Children.Add(_stage);
         _root.Children.Add(_gridHost);
         _root.Children.Add(_searchBorder);
@@ -395,7 +396,7 @@ internal sealed class OverviewWindow : Window
         {
             // Closing with the Windows key switches to the highlighted window, so a quick
             // double-tap jumps back to the previous window like Alt+Tab. Esc closes without switching.
-            if (_sel is Tile t && !_gridMode)
+            if (App.Settings.SecondTapSwitches && _sel is Tile t && !_gridMode)
             {
                 Log.Write($"switch: '{t.Win.AppName}' via {(_hoverLocked ? "keyboard/default selection" : "mouse hover")}");
                 ActivateTile(t);
@@ -436,6 +437,7 @@ internal sealed class OverviewWindow : Window
 
             Native.SetWindowPos(_hwnd, Native.HWND_TOPMOST, _mon.Left, _mon.Top, mw, mh, Native.SWP_NOACTIVATE);
             UpdateBackground();
+            ApplyAppearance();
 
             _suppressText = true;
             _search.Text = "";
@@ -604,6 +606,14 @@ internal sealed class OverviewWindow : Window
     public void ForceHide()
     {
         try { FinishHide(); } catch (Exception e) { Log.Write(e); }
+    }
+
+    /// <summary>Settings that change how the overview looks, applied each time it opens.</summary>
+    void ApplyAppearance()
+    {
+        byte alpha = (byte)Math.Round(Math.Clamp(App.Settings.DimPercent, 0, 80) * 2.55);
+        if (_dim.Background is not SolidColorBrush b || b.Color.A != alpha)
+            _dim.Background = Frozen(Color.FromArgb(alpha, 0, 0, 0));
     }
 
     // ------------------------------------------------------------------ background
@@ -1352,7 +1362,8 @@ internal sealed class OverviewWindow : Window
         }
         _chromeFrom = _chrome;
         _chromeTo = chromeTo;
-        _animMs = SystemParameters.ClientAreaAnimation ? ms : 0;
+        double speed = App.Settings.AnimationSpeed; // 0 = off, 0.5 fast, 1 normal, 1.6 slow
+        _animMs = SystemParameters.ClientAreaAnimation && speed > 0 ? ms * speed : 0;
         _animStart = Stopwatch.GetTimestamp();
         _animDone = done;
         if (!_rendering)
@@ -1474,7 +1485,7 @@ internal sealed class OverviewWindow : Window
                 .Select(x => (x.a, x.m, s: x.m + Usage.Bonus(x.a.Id, query)))
                 .OrderByDescending(x => x.s)
                 .ThenBy(x => x.a.Name.Length)
-                .Take(MaxAppResults - 1)
+                .Take(Math.Min(MaxAppResults, AppTilesThatFit()) - 1) // - 1: room for the web search tile
                 .ToList();
             foreach (var (a, m, s) in matches)
             {
@@ -1504,6 +1515,10 @@ internal sealed class OverviewWindow : Window
         else if (bestApp != null && OpenWindowOf(bestApp) is Tile open) Select(open); // already open: switch, don't start another
         else Select(bestApp);
     }
+
+    /// <summary>How many result tiles fit side by side on this screen.</summary>
+    int AppTilesThatFit() =>
+        Math.Max(2, (int)((_mon.Width / _dpi - 2 * SideMargin + AppGap) / (AppTileW + AppGap)));
 
     /// <summary>A visible window of the app this result starts, if one is open.</summary>
     Tile? OpenWindowOf(AppTile a) =>

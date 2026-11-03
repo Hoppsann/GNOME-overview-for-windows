@@ -131,10 +131,29 @@ internal static class WebSearch
         return exe != null ? IconLoader.ForParsingName(exe, 96) : null;
     }
 
+    /// <summary>Search page of the engine chosen in Settings, or null for "the browser's default".</summary>
+    public static string? EngineSearchUrl(string engine, string query) => engine switch
+    {
+        "google" => "https://www.google.com/search?q=" + Uri.EscapeDataString(query),
+        "bing" => "https://www.bing.com/search?q=" + Uri.EscapeDataString(query),
+        "duckduckgo" => "https://duckduckgo.com/?q=" + Uri.EscapeDataString(query),
+        "brave" => "https://search.brave.com/search?q=" + Uri.EscapeDataString(query),
+        _ => null
+    };
+
     public static void Run(string query)
     {
         query = query.Replace('"', ' ').Trim();
         if (query.Length == 0) return;
+
+        // A specific engine chosen in Settings: open its search page in the default browser.
+        var url = EngineSearchUrl(App.Settings.SearchEngine, query);
+        if (url != null)
+        {
+            try { Process.Start(new ProcessStartInfo(url) { UseShellExecute = true }); }
+            catch (Exception e) { Log.Write(e); }
+            return;
+        }
 
         var exe = BrowserExe();
         Log.Write($"web search: default browser = {exe ?? "(unknown)"}");

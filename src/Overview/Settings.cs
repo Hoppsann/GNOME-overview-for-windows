@@ -11,6 +11,17 @@ internal sealed class Settings
     public bool SuperKey { get; set; } = true;
     public bool HotCorner { get; set; } = false;
     public bool WebSuggestions { get; set; } = true;
+    /// <summary>"default" (the browser's own engine), "google", "bing", "duckduckgo" or "brave".</summary>
+    public string SearchEngine { get; set; } = "default";
+    public bool LearnFromUsage { get; set; } = true;
+    /// <summary>App results shown under the search bar (the web search tile comes on top of these).</summary>
+    public int MaxAppResults { get; set; } = 7;
+    /// <summary>Animation duration multiplier: 1 normal, 0.5 fast, 1.6 slow, 0 off.</summary>
+    public double AnimationSpeed { get; set; } = 1.0;
+    /// <summary>How much the wallpaper behind the overview is darkened, 0–80 %.</summary>
+    public int DimPercent { get; set; } = 36;
+    /// <summary>Tapping the Windows key while the overview is open switches to the highlighted window (else just closes).</summary>
+    public bool SecondTapSwitches { get; set; } = true;
     public bool FirstRun { get; set; } = true;
     /// <summary>Chosen in the installer. Only installed copies check; the standalone exe never does.</summary>
     public bool CheckForUpdates { get; set; } = false;

@@ -27,15 +27,23 @@ internal static class WebSuggest
     const string Google = "https://suggestqueries.google.com/complete/search?client=firefox&ie=UTF-8&oe=UTF-8&q=";
     const string Brave = "https://search.brave.com/api/suggest?q=";
     const string Bing = "https://api.bing.com/osjson.aspx?query=";
+    const string DuckDuckGo = "https://duckduckgo.com/ac/?type=list&q=";
 
     public static async Task<List<string>> FetchAsync(string query, int max, CancellationToken ct)
     {
         string q = Uri.EscapeDataString(query);
-        string browser = Path.GetFileNameWithoutExtension(WebSearch.BrowserExe() ?? "").ToLowerInvariant();
-        string primary = browser switch
+        // Suggestions from the engine chosen in Settings, or the one the default browser uses.
+        string engine = App.Settings.SearchEngine;
+        if (engine == "default")
+        {
+            string browser = Path.GetFileNameWithoutExtension(WebSearch.BrowserExe() ?? "").ToLowerInvariant();
+            engine = browser switch { "brave" => "brave", "msedge" => "bing", _ => "google" };
+        }
+        string primary = engine switch
         {
             "brave" => Brave,
-            "msedge" => Bing,
+            "bing" => Bing,
+            "duckduckgo" => DuckDuckGo,
             _ => Google
         };
 

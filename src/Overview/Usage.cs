@@ -104,9 +104,20 @@ internal static class Usage
         e.Last = now;
     }
 
+    /// <summary>Off in Settings → nothing is learned and results aren't reordered.</summary>
+    static bool Enabled => App.Settings.LearnFromUsage;
+
+    /// <summary>Forgets everything search has learned (Settings → Clear history).</summary>
+    public static void Clear()
+    {
+        _data = new Data();
+        Save();
+    }
+
     /// <summary>You picked this app (or its window) from search, after typing <paramref name="query"/>.</summary>
     public static void RecordPick(string key, string query)
     {
+        if (!Enabled) return;
         Bump(_data.Apps, key, alwaysCount: true);
         string q = Normalize(query);
         for (int len = 1; len <= Math.Min(q.Length, MaxPrefix); len++)
@@ -124,6 +135,7 @@ internal static class Usage
     /// <summary>A window of this app came to the front (from anywhere).</summary>
     public static void RecordUse(string key)
     {
+        if (!Enabled) return;
         Bump(_data.Apps, key, alwaysCount: false);
         SaveSoon();
     }
@@ -138,7 +150,7 @@ internal static class Usage
     /// </summary>
     public static double Bonus(string? key, string query)
     {
-        if (key == null) return 0;
+        if (key == null || !Enabled) return 0;
         double bonus = 0;
         if (_data.Apps.TryGetValue(key, out var used))
             bonus += Math.Min(15, 5 * Math.Log2(1 + used.Count)) * (0.3 + 0.7 * Recency(used.Last));

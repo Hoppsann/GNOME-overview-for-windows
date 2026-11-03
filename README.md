@@ -98,8 +98,16 @@ checks on or off, from the tray menu.
 | **Right-click** or **Menu key** | More actions for the selected window or app |
 | Middle-click or **×** | Close a window |
 
-Right-click the tray icon to turn off the Windows-key trigger, enable a top-left hot corner,
-turn web suggestions on or off, check for updates, or set Overview to start with Windows.
+## Settings
+
+Open **Settings** from the tray icon's menu, from the **Overview Settings** shortcut in the Start menu,
+or with `Overview.exe --settings`. Changes apply right away.
+
+| Section | Options |
+| --- | --- |
+| General | Windows key opens Overview; a second tap switches to the highlighted window or just closes; top-left hot corner; start with Windows; automatic updates |
+| Search | Web search suggestions; web search engine (your browser's default, Google, Bing, DuckDuckGo or Brave Search); rank results by what you use, with a button to clear that history; how many app results to show |
+| Appearance | Animation speed (normal, fast, slow or off); how much the background is darkened |
 
 ## Privacy
 
@@ -161,6 +169,7 @@ updates turned on pick it up from there.
 | `Mru.cs` | Most-recently-used window order for the Alt+Tab-style switching |
 | `HotCorner.cs` | Optional top-left hot corner |
 | `Installer.cs` / `SetupWindow.cs` | Setup wizard, install, update and uninstall |
+| `SettingsWindow.cs` | The Settings window |
 | `Updater.cs` | Checks GitHub Releases and downloads new versions |
 
 </details>
