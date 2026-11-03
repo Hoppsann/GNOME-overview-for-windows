@@ -25,6 +25,9 @@ then tap the Windows key again to jump straight there.
   opens, so a **double-tap** of the Windows key flips between your last two windows.
 - **Search everything.** Typing filters your open windows and shows matching installed apps
   (desktop and Microsoft Store). Fuzzy matching works: `vsc` finds Visual Studio Code.
+- **Learns what you use.** Results you picked before for the same letters come first (the latest pick
+  wins), and apps you use a lot rank higher. If you open Command Prompt after typing `c`, then `c`
+  alone brings it up next time.
 - **Web search.** If nothing on your PC matches, press Enter to search in your default browser with
   its own search engine. Suggestions appear while you type.
 - **App grid.** The ⋮⋮⋮ button at the end of the search bar shows every installed app.
@@ -106,7 +109,8 @@ Overview runs entirely on your PC. It only goes online for two things, and you c
   engine (Google, Bing or Brave), the same as typing in the browser's address bar. Turn this off in the tray menu.
 - **Update checks**, if you chose them during setup. These only contact GitHub.
 
-Settings and a small log are stored in `%APPDATA%\Overview`.
+Settings, a small log and what search has learned (`usage.json`) are stored in `%APPDATA%\Overview`.
+Delete `usage.json` to make search forget.
 "Start with Windows" uses a Task Scheduler task that runs at sign-in (it starts sooner than the
 Startup list), or the Startup list if the task can't be created. The exe unpacks itself once to
 `%TEMP%\.net\Overview` so later starts are faster.
@@ -150,6 +154,7 @@ updates turned on pick it up from there.
 | `Layout.cs` | GNOME-like row packing that keeps windows' relative sizes |
 | `AppCatalog.cs` | All installed apps from `shell:AppsFolder` (desktop and Store) |
 | `Search.cs` | Fuzzy matching: prefix, word start, acronym, substring |
+| `Usage.cs` | Learns from what you pick and use, to rank search results |
 | `WebSearch.cs` / `WebSuggest.cs` | Default-browser web search and search suggestions |
 | `ShellActions.cs` | Right-click actions: run as admin, file location, properties |
 | `Launcher.cs` | Starts apps, folders and searches on a separate thread so the overview never freezes |

@@ -1,8 +1,10 @@
-## What's new in 1.8.6
-Faster start when you sign in to Windows:
-- **Starts sooner after sign-in.** *Start with Windows* now uses a Task Scheduler task that runs as soon as you sign in. Apps in the Startup list are held back by Windows for several seconds. If your account can't create the task, it falls back to the Startup list. Existing installs switch over automatically.
-- **Faster to load.** The app unpacks itself once to a cache folder instead of decompressing about 170 MB on every start.
-- **The Windows key works sooner.** The keyboard hook starts first. The wallpaper blur, app list and icon preloading wait until startup is done and run at low priority, so they don't slow down the rest of your PC while it boots.
+## What's new in 1.8.7
+**Search learns what you use**:
+- **What you picked for what you typed comes first.** If you open Command Prompt after typing "c", then next time "c" puts Command Prompt first instead of Calculator or Clock. Typing "comm" and picking it also teaches "c" and "co". If you've picked different apps for the same letters, the most recent pick wins.
+- **Apps you use more rank higher**, counted wherever you open them from: Overview, the taskbar, the Start menu or the desktop. Recent use counts more.
+- How well the text matches still comes first, so "clock" always finds Clock.
+- If the top result is already open, Enter switches to its window instead of starting a second copy.
+- What search has learned is stored only on your PC in `%APPDATA%\Overview\usage.json`. Delete it to start over.
 
 ## Download
 - **`Overview-Setup.exe`**: the installer. Choose *Start with Windows*, *Check for updates automatically* and *Desktop shortcut*. Installs for your user only, no admin needed. If you already have Overview installed with updates on, it will offer this version by itself.

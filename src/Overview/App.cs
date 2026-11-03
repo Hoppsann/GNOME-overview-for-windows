@@ -86,6 +86,7 @@ public sealed class App : Application
         // priority, so signing in to Windows isn't slowed down by it.
         _hook = new KeyboardHook(Dispatcher, OnWindowsKeyTap) { Enabled = Settings.SuperKey };
         _hook.Start();
+        Usage.Load();
         Mru.Start();
 
         _overview = new OverviewWindow();
@@ -309,6 +310,7 @@ public sealed class App : Application
             _overview?.ForceHide();
             _overview?.AllowRealClose();
             _overview?.Close();
+            Usage.Save();
         }
         catch (Exception e) { Log.Write(e); }
         Shutdown();

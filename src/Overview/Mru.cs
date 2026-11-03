@@ -50,6 +50,14 @@ internal static class Mru
         var root = Native.GetAncestor(hwnd, GA_ROOTOWNER); // a dialog counts as using its main window
         if (root != IntPtr.Zero && root != hwnd) Stamps[root] = _counter;
 
+        // Search learns from what you use, wherever you started or switched to it from.
+        try
+        {
+            var key = WindowEnumerator.AppKeyOf(root != IntPtr.Zero ? root : hwnd);
+            if (key != null) Usage.RecordUse(key);
+        }
+        catch (Exception e) { Log.Write(e); }
+
         if (Stamps.Count > 4000)
             foreach (var dead in Stamps.Keys.Where(h => !Native.IsWindow(h)).ToList()) Stamps.Remove(dead);
     }

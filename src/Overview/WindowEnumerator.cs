@@ -96,18 +96,7 @@ internal static class WindowEnumerator
             return null; // invisible helper windows
         }
 
-        // Process (UWP apps live in a child CoreWindow owned by a different process).
-        Native.GetWindowThreadProcessId(h, out uint pid);
-        if (cls == "ApplicationFrameWindow")
-        {
-            uint host = pid;
-            Native.EnumChildWindows(h, (c, _) =>
-            {
-                Native.GetWindowThreadProcessId(c, out uint cp);
-                if (cp != host) { pid = cp; return false; }
-                return true;
-            }, IntPtr.Zero);
-        }
+        uint pid = AppProcessId(h, cls);
         w.Pid = pid;
         (w.ExePath, w.Aumid) = ProcessInfo(pid);
         w.ProcName = w.ExePath != null ? Path.GetFileNameWithoutExtension(w.ExePath) : "";
@@ -132,6 +121,37 @@ internal static class WindowEnumerator
         if (w.Aumid != null && IconLoader.TryGetCached(@"shell:AppsFolder\" + w.Aumid, 48, out var a) && a != null) return a;
         if (w.ExePath != null && IconLoader.TryGetCached(w.ExePath, 48, out var e) && e != null) return e;
         return null;
+    }
+
+    /// <summary>The process that owns a window's app (UWP apps live in a child CoreWindow owned by a
+    /// different process than their ApplicationFrameWindow).</summary>
+    static uint AppProcessId(IntPtr h, string cls)
+    {
+        Native.GetWindowThreadProcessId(h, out uint pid);
+        if (cls == "ApplicationFrameWindow")
+        {
+            uint host = pid;
+            Native.EnumChildWindows(h, (c, _) =>
+            {
+                Native.GetWindowThreadProcessId(c, out uint cp);
+                if (cp != host) { pid = cp; return false; }
+                return true;
+            }, IntPtr.Zero);
+        }
+        return pid;
+    }
+
+    /// <summary>The usage key of the app a window belongs to (see <see cref="AppCatalog.KeyFor"/>), or null.</summary>
+    public static string? AppKeyOf(IntPtr hwnd)
+    {
+        try
+        {
+            uint pid = AppProcessId(hwnd, Native.ClassName(hwnd));
+            if (pid == 0 || pid == (uint)Environment.ProcessId) return null; // not our own overview
+            var (exe, aumid) = ProcessInfo(pid);
+            return AppCatalog.KeyFor(exe, aumid);
+        }
+        catch { return null; }
     }
 
     static (string? path, string? aumid) ProcessInfo(uint pid)

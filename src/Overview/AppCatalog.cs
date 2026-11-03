@@ -25,6 +25,20 @@ internal static class AppCatalog
     {
         public List<AppEntry> Apps = new();
         public Dictionary<string, string> NameById = new(StringComparer.OrdinalIgnoreCase);
+        /// <summary>exe path → app id, so a window (or a launch from the taskbar) counts for its app in search.</summary>
+        public Dictionary<string, string> ExeToId = new(StringComparer.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// The key search usage is recorded under: the app's id when the window can be matched to an
+    /// installed app (by Store app id or by exe), otherwise "exe:" + the exe path.
+    /// </summary>
+    public static string? KeyFor(string? exePath, string? aumid)
+    {
+        var snap = _snap;
+        if (aumid != null && snap.NameById.ContainsKey(aumid)) return aumid;
+        if (exePath == null) return null;
+        return snap.ExeToId.TryGetValue(exePath, out var id) ? id : "exe:" + exePath.ToLowerInvariant();
     }
 
     static volatile Snapshot _snap = new();
@@ -89,7 +103,59 @@ internal static class AppCatalog
         }
         var snap = new Snapshot { Apps = list };
         foreach (var a in list) snap.NameById.TryAdd(a.Id, a.Name);
-        _snap = snap;
+        _snap = snap; // usable right away; the exe map follows
+        try { snap.ExeToId = BuildExeMap(list); }
+        catch (Exception e) { Log.Write(e); }
+    }
+
+    /// <summary>
+    /// Which installed app each exe belongs to. Shortcuts with arguments are skipped: those are
+    /// web apps and the like (e.g. a YouTube app that runs chrome.exe), not the program itself.
+    /// Runs on the catalog's background thread.
+    /// </summary>
+    static Dictionary<string, string> BuildExeMap(List<AppEntry> list)
+    {
+        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        object? shell = null;
+        try
+        {
+            var type = Type.GetTypeFromProgID("WScript.Shell");
+            if (type != null) shell = Activator.CreateInstance(type);
+            foreach (var a in list)
+            {
+                if (ShellActions.IsStoreApp(a)) continue; // Store apps are matched by their app id
+                string? file = ShellActions.ResolveFile(a);
+                if (file == null) continue;
+                string? exe = file.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase) ? ShortcutTarget(shell, file) : file;
+                if (exe != null && exe.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) map.TryAdd(exe, a.Id);
+            }
+        }
+        finally
+        {
+            if (shell != null) System.Runtime.InteropServices.Marshal.FinalReleaseComObject(shell);
+        }
+        return map;
+    }
+
+    static string? ShortcutTarget(object? shell, string lnk)
+    {
+        if (shell == null) return null;
+        object? link = null;
+        try
+        {
+            dynamic sh = shell;
+            link = sh.CreateShortcut(lnk);
+            dynamic l = link!;
+            string args = l.Arguments ?? "";
+            if (args.Trim().Length > 0) return null;
+            string target = l.TargetPath ?? "";
+            return target.Length > 0 ? Environment.ExpandEnvironmentVariables(target) : null;
+        }
+        catch { return null; }
+        finally
+        {
+            if (link != null) System.Runtime.InteropServices.Marshal.FinalReleaseComObject(link);
+        }
     }
 
     /// <summary>

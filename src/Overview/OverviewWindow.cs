@@ -36,6 +36,7 @@ internal sealed class OverviewWindow : Window
         public bool Visible = true;    // passes the search filter
         public double Score;
         public double SortKey;
+        public string? Key;            // app usage key (see AppCatalog.KeyFor)
         public long Mru;               // higher = used more recently
         public int ZIndex;             // z-order position, tie-breaker for Mru
         public Border Ring = null!;
@@ -700,7 +701,7 @@ internal sealed class OverviewWindow : Window
         for (int index = items.Count - 1; index >= 0; index--)
         {
             var w = items[index];
-            var t = new Tile(w) { ZIndex = index, Mru = Mru.Of(w.Hwnd) };
+            var t = new Tile(w) { ZIndex = index, Mru = Mru.Of(w.Hwnd), Key = AppCatalog.KeyFor(w.ExePath, w.Aumid) };
 
             if (Native.DwmRegisterThumbnail(_hwnd, w.Hwnd, out var thumb) == 0)
             {
@@ -1445,32 +1446,42 @@ internal sealed class OverviewWindow : Window
         LockHover();
         if (_gridMode && Searching) LeaveGrid(); // typing in the app grid switches to search results
 
-        var tokens = Search.Tokenize(_search.Text);
+        // Ranking = how well the text matches + what you've used (Usage): what you picked for
+        // these letters before (most recent first), and how often/recently you use the app.
+        string query = _search.Text;
+        var tokens = Search.Tokenize(query);
         Tile? bestTile = null;
+        double bestTileMatch = 0;
         foreach (var t in _tiles)
         {
             if (tokens.Length == 0) { t.Visible = true; t.Score = 0; continue; }
-            t.Score = Math.Max(Search.Score(tokens, t.Win.Title),
-                      Math.Max(Search.Score(tokens, t.Win.AppName),
-                               Search.Score(tokens, t.Win.ProcName) * 0.9));
-            t.Visible = t.Score > 0;
+            double match = Math.Max(Search.Score(tokens, t.Win.Title),
+                           Math.Max(Search.Score(tokens, t.Win.AppName),
+                                    Search.Score(tokens, t.Win.ProcName) * 0.9));
+            t.Visible = match > 0;
+            t.Score = t.Visible ? match + Usage.Bonus(t.Key, query) : 0;
             if (t.Visible && (bestTile == null || t.Score > bestTile.Score)) bestTile = t;
+            if (t.Visible) bestTileMatch = Math.Max(bestTileMatch, match);
         }
 
         ClearApps();
+        double bestAppMatch = 0;
         if (tokens.Length > 0)
         {
             var matches = AppCatalog.Apps
-                .Select(a => (a, s: Search.Score(tokens, a.Name)))
-                .Where(m => m.s > 0)
-                .OrderByDescending(m => m.s)
-                .ThenBy(m => m.a.Name.Length)
-                .Take(MaxAppResults - 1);
-            foreach (var (a, s) in matches)
+                .Select(a => (a, m: Search.Score(tokens, a.Name)))
+                .Where(x => x.m > 0)
+                .Select(x => (x.a, x.m, s: x.m + Usage.Bonus(x.a.Id, query)))
+                .OrderByDescending(x => x.s)
+                .ThenBy(x => x.a.Name.Length)
+                .Take(MaxAppResults - 1)
+                .ToList();
+            foreach (var (a, m, s) in matches)
             {
                 var tile = new AppTile(a, s);
                 CreateAppVisuals(tile, _stage);
                 _apps.Add(tile);
+                bestAppMatch = Math.Max(bestAppMatch, m);
             }
             // Always offer a web search as the last result.
             var web = new AppTile(WebEntry, 0) { IsWeb = true };
@@ -1487,10 +1498,18 @@ internal sealed class OverviewWindow : Window
         if (tokens.Length == 0) { SelectDefault(); return; } // search cleared: back to the previous window
         var bestApp = _apps.FirstOrDefault(a => !a.IsWeb); // already sorted best-first
         double appScore = bestApp?.Score ?? 0, winScore = bestTile?.Score ?? 0;
-        if (Math.Max(appScore, winScore) < WebThreshold) Select(_apps.First(a => a.IsWeb));
+        // "Nothing matches well" is judged on the text match alone, not on usage.
+        if (Math.Max(bestAppMatch, bestTileMatch) < WebThreshold) Select(_apps.First(a => a.IsWeb));
         else if (bestTile != null && winScore >= appScore) Select(bestTile);
+        else if (bestApp != null && OpenWindowOf(bestApp) is Tile open) Select(open); // already open: switch, don't start another
         else Select(bestApp);
     }
+
+    /// <summary>A visible window of the app this result starts, if one is open.</summary>
+    Tile? OpenWindowOf(AppTile a) =>
+        _tiles.Where(t => t.Visible && t.Key != null && string.Equals(t.Key, a.App.Id, StringComparison.OrdinalIgnoreCase))
+              .OrderByDescending(t => t.Mru)
+              .FirstOrDefault();
 
     // ------------------------------------------------------------------ selection & input
 
@@ -1742,6 +1761,7 @@ internal sealed class OverviewWindow : Window
         // Record the switch right away rather than waiting for Windows' focus event,
         // so an immediate double-tap knows which window is now the "previous" one.
         Mru.Touch(h);
+        if (Searching && t.Key != null) Usage.RecordPick(t.Key, _search.Text); // search learns from this too
         Dismiss(t);
     }
 
@@ -1751,6 +1771,7 @@ internal sealed class OverviewWindow : Window
         // Started on another thread (Store apps can take seconds), allowed to take focus.
         var app = a.App;
         string query = _search.Text;
+        if (!a.IsWeb) Usage.RecordPick(app.Id, query); // search learns: these letters → this app
         if (a.IsWeb) Launcher.Run(() => WebSearch.Run(query));
         else Launcher.Run(() => AppCatalog.Launch(app));
         Dismiss(null);
