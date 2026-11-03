@@ -16,10 +16,13 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
-    <Version>1.8.5</Version>
+    <Version>1.8.6</Version>
     <Product>Overview</Product>
     <Company>Hoppsann</Company>
     <NoWarn>$(NoWarn);WFAC010</NoWarn>
+    <!-- Single-file: unpack once to %TEMP%\.net\Overview and load from there on later starts,
+         instead of decompressing the whole bundle on every start. -->
+    <IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
     <Description>GNOME-style Activities overview for Windows</Description>
   </PropertyGroup>
 

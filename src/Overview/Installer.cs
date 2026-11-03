@@ -221,7 +221,7 @@ internal static class Installer
         {
             StopRunningCopies();
             if (Settings.Load().RestoreTaskbarAutoHide) Native.SetTaskbarAutoHide(true); // was paused when killed
-            if (AutoStartPointsHere()) AutoStart.Set(false);
+            if (AutoStart.PointsInto(InstallDir)) AutoStart.Set(false);
             TryDelete(StartMenuLink);
             TryDelete(DesktopLink);
             Registry.CurrentUser.DeleteSubKeyTree(UninstallKey, throwOnMissingSubKey: false);
@@ -245,16 +245,6 @@ internal static class Installer
                 MessageBoxButton.OK, MessageBoxImage.Error);
             return 1;
         }
-    }
-
-    static bool AutoStartPointsHere()
-    {
-        try
-        {
-            using var k = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run");
-            return k?.GetValue(App.AppName) is string cmd && cmd.Contains(InstallDir, StringComparison.OrdinalIgnoreCase);
-        }
-        catch { return false; }
     }
 
     static void TryDelete(string path)

@@ -295,7 +295,6 @@ internal sealed class OverviewWindow : Window
         Content = _root;
 
         _suggestTimer.Tick += (_, _) => { _suggestTimer.Stop(); FetchSuggestions(); };
-        MenuStyles.Install();
 
         PreviewKeyDown += OnPreviewKeyDown;
         PreviewMouseMove += OnPreviewMouseMove;
@@ -320,9 +319,17 @@ internal sealed class OverviewWindow : Window
         Native.DwmSetWindowAttribute(_hwnd, Native.DWMWA_USE_IMMERSIVE_DARK_MODE, ref on, sizeof(int));
         Native.DwmSetWindowAttribute(_hwnd, Native.DWMWA_WINDOW_CORNER_PREFERENCE, ref noRound, sizeof(int));
         KeepWindowsBehindLive();
+    }
 
-        // Warm up so the first open is as fast as later ones: blur the wallpaper now and
-        // run WPF's first layout pass (templates, fonts) while nobody is waiting.
+    /// <summary>
+    /// Called once startup is done and the app is idle: blur the wallpaper and run WPF's first
+    /// layout pass (templates, fonts), so the first open is as fast as later ones without
+    /// slowing down startup itself.
+    /// </summary>
+    public void WarmUp()
+    {
+        if (_state != State.Hidden) return; // already opened: nothing left to warm up
+        MenuStyles.Install();
         try
         {
             UpdateBackground();
@@ -1135,6 +1142,7 @@ internal sealed class OverviewWindow : Window
 
     void OpenMenu(ContextMenu menu, FrameworkElement target, bool atMouse)
     {
+        MenuStyles.Install(); // normally already done by WarmUp
         CloseMenu();
         menu.PlacementTarget = target;
         menu.Placement = atMouse ? System.Windows.Controls.Primitives.PlacementMode.MousePoint
@@ -1156,6 +1164,7 @@ internal sealed class OverviewWindow : Window
 
     void ShowAppMenu(AppTile a, bool atMouse)
     {
+        MenuStyles.Install(); // before the menu is built, so its style applies
         if (_state != State.Open || a.IsWeb) return;
         LockHover();
         Select(a);
@@ -1179,6 +1188,7 @@ internal sealed class OverviewWindow : Window
 
     void ShowWindowMenu(Tile t, bool atMouse)
     {
+        MenuStyles.Install(); // before the menu is built, so its style applies
         if (_state != State.Open) return;
         LockHover();
         Select(t);

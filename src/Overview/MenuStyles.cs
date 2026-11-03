@@ -64,8 +64,13 @@ internal static class MenuStyles
 </ResourceDictionary>
 """;
 
+    static bool _installed;
+
+    /// <summary>Loads the style once (parsing XAML takes a moment, so it's not done at startup).</summary>
     public static void Install()
     {
+        if (_installed) return;
+        _installed = true;
         try
         {
             if (Application.Current == null) return;

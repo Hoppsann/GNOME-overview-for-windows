@@ -46,24 +46,211 @@ internal sealed class Settings
     }
 }
 
+/// <summary>
+/// "Start with Windows". Preferred: a Task Scheduler task that runs at sign-in. It starts right away,
+/// while apps in the Startup list (the Run key) are held back by Windows for several seconds after
+/// signing in. If Windows won't let this account create the task, the Run key is used instead.
+/// Which one is in use is remembered in HKCU\Software\Hoppsann\Overview\AutoStart ("task" or "run").
+/// </summary>
 internal static class AutoStart
 {
     const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
+    const string StateKey = @"Software\Hoppsann\Overview";
+    const string TaskName = "Overview (start at sign-in)";
 
-    public static bool IsEnabled()
+    static string? Mode
     {
-        using var k = Registry.CurrentUser.OpenSubKey(RunKey);
-        return k?.GetValue(App.AppName) is string;
+        get
+        {
+            try { using var k = Registry.CurrentUser.OpenSubKey(StateKey); return k?.GetValue("AutoStart") as string; }
+            catch { return null; }
+        }
+        set
+        {
+            try
+            {
+                using var k = Registry.CurrentUser.CreateSubKey(StateKey);
+                if (value == null) k.DeleteValue("AutoStart", false);
+                else k.SetValue("AutoStart", value);
+            }
+            catch (Exception e) { Log.Write(e); }
+        }
     }
+
+    static string? RunValue()
+    {
+        try { using var k = Registry.CurrentUser.OpenSubKey(RunKey); return k?.GetValue(App.AppName) as string; }
+        catch { return null; }
+    }
+
+    public static bool IsEnabled() => Mode == "task" || RunValue() != null;
+
+    /// <summary>True if autostart starts an exe in <paramref name="folder"/> (for uninstall).</summary>
+    public static bool PointsInto(string folder) =>
+        Mode == "task" || (RunValue()?.Contains(folder, StringComparison.OrdinalIgnoreCase) ?? false);
 
     /// <param name="exe">The exe to start (the installer passes the installed copy); defaults to this exe.</param>
     public static void Set(bool on, string? exe = null)
     {
+        exe ??= Environment.ProcessPath ?? "";
         try
         {
-            using var k = Registry.CurrentUser.CreateSubKey(RunKey);
-            if (on) k.SetValue(App.AppName, $"\"{exe ?? Environment.ProcessPath}\"");
-            else k.DeleteValue(App.AppName, false);
+            if (on && CreateTask(exe))
+            {
+                SetRunValue(null);
+                Mode = "task";
+            }
+            else if (on)
+            {
+                SetRunValue(exe);
+                Mode = "run";
+            }
+            else
+            {
+                if (Mode == "task") DeleteTask();
+                SetRunValue(null);
+                Mode = null;
+            }
+        }
+        catch (Exception e) { Log.Write(e); }
+    }
+
+    /// <summary>Installs from before the sign-in task (Run key only) switch to it once, quietly.</summary>
+    public static void UpgradeToFastStart()
+    {
+        try
+        {
+            if (Mode != null) return; // already decided
+            var run = RunValue();
+            if (run == null) return;  // autostart is off
+            string exe = run.Trim().Trim('"');
+            if (File.Exists(exe)) Set(true, exe);
+        }
+        catch (Exception e) { Log.Write(e); }
+    }
+
+    static void SetRunValue(string? exe)
+    {
+        using var k = Registry.CurrentUser.CreateSubKey(RunKey);
+        if (exe != null) k.SetValue(App.AppName, $"\"{exe}\"");
+        else k.DeleteValue(App.AppName, false);
+    }
+
+    static bool CreateTask(string exe)
+    {
+        string? sid = System.Security.Principal.WindowsIdentity.GetCurrent().User?.Value;
+        if (sid == null) return false;
+        string esc(string s) => System.Security.SecurityElement.Escape(s) ?? s;
+        // For this user only; normal priority (tasks default to below normal); no time limit
+        // (the default stops tasks after 3 days); runs on battery too.
+        string xml = $"""
+<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Author>Overview</Author>
+    <Description>Starts Overview (GNOME-style overview for Windows) when you sign in.</Description>
+  </RegistrationInfo>
+  <Triggers>
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+      <UserId>{sid}</UserId>
+    </LogonTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <UserId>{sid}</UserId>
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>LeastPrivilege</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <AllowHardTerminate>false</AllowHardTerminate>
+    <StartWhenAvailable>false</StartWhenAvailable>
+    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
+    <IdleSettings>
+      <StopOnIdleEnd>false</StopOnIdleEnd>
+      <RestartOnIdle>false</RestartOnIdle>
+    </IdleSettings>
+    <AllowStartOnDemand>true</AllowStartOnDemand>
+    <Enabled>true</Enabled>
+    <Hidden>false</Hidden>
+    <RunOnlyIfIdle>false</RunOnlyIfIdle>
+    <WakeToRun>false</WakeToRun>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <Priority>4</Priority>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>{esc(exe)}</Command>
+      <WorkingDirectory>{esc(Path.GetDirectoryName(exe) ?? "")}</WorkingDirectory>
+    </Exec>
+  </Actions>
+</Task>
+""";
+        string file = Path.Combine(Path.GetTempPath(), "overview-task.xml");
+        try
+        {
+            File.WriteAllText(file, xml, Encoding.Unicode); // schtasks wants UTF-16
+            int code = Schtasks($"/Create /TN \"{TaskName}\" /XML \"{file}\" /F");
+            if (code != 0) Log.Write($"couldn't create the sign-in task (schtasks exit {code}), using the Startup list");
+            return code == 0;
+        }
+        finally { try { File.Delete(file); } catch { } }
+    }
+
+    static void DeleteTask() => Schtasks($"/Delete /TN \"{TaskName}\" /F");
+
+    static int Schtasks(string args)
+    {
+        try
+        {
+            using var p = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("schtasks.exe", args)
+            {
+                CreateNoWindow = true,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            });
+            if (p == null) return -1;
+            p.StandardOutput.ReadToEnd();
+            p.StandardError.ReadToEnd();
+            return p.WaitForExit(15000) ? p.ExitCode : -1;
+        }
+        catch (Exception e)
+        {
+            Log.Write(e);
+            return -1;
+        }
+    }
+}
+
+/// <summary>
+/// The exe unpacks itself once into a cache folder (%TEMP%\.net\Overview\...) so later starts load
+/// from there instead of decompressing ~170 MB every time. Each version gets its own folder; this
+/// removes old versions' folders.
+/// </summary>
+internal static class StartupCache
+{
+    public static void CleanOldVersions()
+    {
+        try
+        {
+            var current = new DirectoryInfo(AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar));
+            var parent = current.Parent;
+            // Only touch the bundle cache: %TEMP%\.net\Overview\<hash>
+            if (parent == null || !parent.Name.Equals("Overview", StringComparison.OrdinalIgnoreCase)
+                || parent.Parent == null || !parent.Parent.Name.Equals(".net", StringComparison.OrdinalIgnoreCase))
+                return;
+            foreach (var dir in parent.GetDirectories())
+            {
+                if (dir.FullName.Equals(current.FullName, StringComparison.OrdinalIgnoreCase)) continue;
+                // Skip recent ones: another version (e.g. the standalone exe) might still be running from it.
+                if (DateTime.UtcNow - dir.LastWriteTimeUtc < TimeSpan.FromDays(3)) continue;
+                try { dir.Delete(recursive: true); } catch { /* in use: try again next time */ }
+            }
         }
         catch (Exception e) { Log.Write(e); }
     }

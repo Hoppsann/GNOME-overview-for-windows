@@ -1,12 +1,8 @@
-## What's new in 1.8.5
-Stability fixes for freezes and odd behavior:
-- **Fixed: the Windows key could get stuck "held down".** Overview used to block the real Windows-key release and send a fake one. Windows silently drops fake key presses while an admin window has focus, so the key could stay "down" and every key you typed acted as a Win+ shortcut. Real key presses are never blocked now.
-- **No more freezing while starting things.** Opening apps (Store apps can take seconds), *Run as administrator* (which waited for the UAC prompt), file locations and web searches now start on a separate thread.
-- **Icons load in the background**, so opening the overview and typing never wait on the disk.
-- **Switching windows can't hang** on an app that's Not Responding, and no longer pops open the old app's menu bar.
-- Windows-key taps made while the PC was busy no longer pile up and flicker the overview open and closed.
-- The keyboard hook reinstalls itself every 10 minutes, in case Windows removed it while the PC was overloaded (that made the Windows key stop opening the overview).
-- The installed-apps list can't get stuck, and the app grid no longer rebuilds itself when nothing changed.
+## What's new in 1.8.6
+Faster start when you sign in to Windows:
+- **Starts sooner after sign-in.** *Start with Windows* now uses a Task Scheduler task that runs as soon as you sign in. Apps in the Startup list are held back by Windows for several seconds. If your account can't create the task, it falls back to the Startup list. Existing installs switch over automatically.
+- **Faster to load.** The app unpacks itself once to a cache folder instead of decompressing about 170 MB on every start.
+- **The Windows key works sooner.** The keyboard hook starts first. The wallpaper blur, app list and icon preloading wait until startup is done and run at low priority, so they don't slow down the rest of your PC while it boots.
 
 ## Download
 - **`Overview-Setup.exe`**: the installer. Choose *Start with Windows*, *Check for updates automatically* and *Desktop shortcut*. Installs for your user only, no admin needed. If you already have Overview installed with updates on, it will offer this version by itself.

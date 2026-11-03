@@ -81,14 +81,15 @@ public sealed class App : Application
             Settings.RestoreTaskbarAutoHide = false;
             Settings.Save();
         }
+        // Startup order: what makes the Windows key work comes first; the heavy work (wallpaper blur,
+        // layout warm-up, the app list and its icons) waits until startup is done and runs at low
+        // priority, so signing in to Windows isn't slowed down by it.
+        _hook = new KeyboardHook(Dispatcher, OnWindowsKeyTap) { Enabled = Settings.SuperKey };
+        _hook.Start();
         Mru.Start();
-        AppCatalog.StartRefresh(); // also preloads every icon in the background
 
         _overview = new OverviewWindow();
         _overview.Prepare();
-
-        _hook = new KeyboardHook(Dispatcher, OnWindowsKeyTap) { Enabled = Settings.SuperKey };
-        _hook.Start();
 
         _hotCorner = new HotCorner(ToggleOverview) { Enabled = Settings.HotCorner };
 
@@ -97,6 +98,17 @@ public sealed class App : Application
         ThreadPool.RegisterWaitForSingleObject(_quitEvent!, (_, _) => Dispatcher.InvokeAsync(Quit), null, -1, true);
 
         CreateTray();
+
+        Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, () =>
+        {
+            AppCatalog.StartRefresh(); // background thread, below-normal priority; also preloads icons
+            _overview?.WarmUp();
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                AutoStart.UpgradeToFastStart(); // older installs: move autostart to the faster sign-in task
+                StartupCache.CleanOldVersions();
+            });
+        });
 
         string version = Updater.Current.ToString();
         if (Settings.FirstRun)
@@ -229,7 +241,11 @@ public sealed class App : Application
         };
 
         var startup = new Forms.ToolStripMenuItem("Start with Windows") { Checked = AutoStart.IsEnabled(), CheckOnClick = true };
-        startup.CheckedChanged += (_, _) => AutoStart.Set(startup.Checked);
+        startup.CheckedChanged += (_, _) =>
+        {
+            bool on = startup.Checked;
+            ThreadPool.QueueUserWorkItem(_ => AutoStart.Set(on)); // runs schtasks: keep it off the UI thread
+        };
 
         var quit = new Forms.ToolStripMenuItem("Quit", null, (_, _) => Quit());
 

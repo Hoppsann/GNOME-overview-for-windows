@@ -69,7 +69,9 @@ internal static class AppCatalog
             }
             finally { Interlocked.Exchange(ref _busy, 0); }
         })
-        { IsBackground = true, Name = "Overview app catalog" };
+        // Below normal: reading hundreds of apps and icons must never compete with what you're doing,
+        // least of all right after signing in, when everything else is starting too.
+        { IsBackground = true, Name = "Overview app catalog", Priority = ThreadPriority.BelowNormal };
         t.SetApartmentState(ApartmentState.STA);
         t.Start();
     }

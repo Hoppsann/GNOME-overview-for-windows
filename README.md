@@ -107,6 +107,9 @@ Overview runs entirely on your PC. It only goes online for two things, and you c
 - **Update checks**, if you chose them during setup. These only contact GitHub.
 
 Settings and a small log are stored in `%APPDATA%\Overview`.
+"Start with Windows" uses a Task Scheduler task that runs at sign-in (it starts sooner than the
+Startup list), or the Startup list if the task can't be created. The exe unpacks itself once to
+`%TEMP%\.net\Overview` so later starts are faster.
 
 ## Known limitations
 
