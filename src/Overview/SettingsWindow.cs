@@ -160,7 +160,9 @@ internal sealed class SettingsWindow : Window
         footer.Children.Add(link);
         root.Children.Add(footer);
 
-        Content = new ScrollViewer { Content = root, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+        var scroller = new ScrollViewer { Content = root, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+        SmoothScroll.Attach(scroller); // WPF's own wheel scrolling is far too fast with touchpads and fine-step wheels
+        Content = scroller;
     }
 
     static string SpeedKey(double speed) => speed switch

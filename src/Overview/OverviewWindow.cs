@@ -259,6 +259,7 @@ internal sealed class OverviewWindow : Window
             Margin = new Thickness(SideMargin, AppsTop, SideMargin, BottomMargin),
             Visibility = Visibility.Collapsed
         };
+        SmoothScroll.Attach(_gridHost);
         // A click on empty space in the grid goes back to the windows.
         _gridHost.MouseLeftButtonUp += (_, e) => { e.Handled = true; HideGrid(); };
         _searchBorder = new Border
