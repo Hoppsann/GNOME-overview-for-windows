@@ -141,6 +141,29 @@ internal sealed class OverviewWindow : Window
     double _animMs;
     Action? _animDone;
     bool _rendering;
+    bool _fadeBackground = true; // set on open: was the desktop background visible?
+
+    /// <summary>
+    /// True if a meaningful part of the desktop background was visible when the overview opened
+    /// (not covered by windows). Samples a grid over the screen against where the windows are.
+    /// </summary>
+    bool BackgroundVisible()
+    {
+        var frames = _tiles.Where(t => t.HasStart).Select(t => t.Start).ToList();
+        if (frames.Count == 0) return true;
+        const int cols = 48, rows = 27;
+        double w = _mon.Width, h = _mon.Height;
+        int uncovered = 0;
+        for (int r = 0; r < rows; r++)
+        {
+            for (int c = 0; c < cols; c++)
+            {
+                var p = new Point((c + 0.5) * w / cols, (r + 0.5) * h / rows);
+                if (!frames.Any(f => f.Contains(p))) uncovered++;
+            }
+        }
+        return uncovered > cols * rows / 100; // more than ~1 % of the screen
+    }
     double _chrome, _chromeFrom, _chromeTo;
 
     public OverviewWindow()
@@ -471,6 +494,7 @@ internal sealed class OverviewWindow : Window
             PositionWallpaper();
 
             BuildTiles(items);
+            _fadeBackground = BackgroundVisible();
             LockHover();
             Relayout();
 
@@ -1493,8 +1517,11 @@ internal sealed class OverviewWindow : Window
 
     void ApplyChrome()
     {
-        _bg.Opacity = _chrome;   // blur fades in over the sharp wallpaper…
-        _dim.Opacity = _chrome;  // …and darkens
+        // The blur fades in over the sharp wallpaper (and darkens) only if the wallpaper could be seen;
+        // if windows covered the screen, it's blurred from the start.
+        double background = _fadeBackground ? _chrome : 1;
+        _bg.Opacity = background;
+        _dim.Opacity = background;
         _stage.Opacity = _chrome;
         _gridHost.Opacity = _chrome;
         _searchBorder.Opacity = _chrome;
