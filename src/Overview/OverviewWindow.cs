@@ -110,7 +110,8 @@ internal sealed class OverviewWindow : Window
 
     readonly Grid _root;
     readonly Border _dim;
-    readonly Image _bg;
+    readonly Image _bg;      // blurred wallpaper
+    readonly Image _bgSharp; // the wallpaper as the desktop shows it
     readonly Canvas _stage;
     readonly Border _searchBorder;
     readonly TextBox _search;
@@ -156,7 +157,11 @@ internal sealed class OverviewWindow : Window
         UseLayoutRounding = true;
         SnapsToDevicePixels = true;
 
-        _bg = new Image { Stretch = Stretch.UniformToFill, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+        // Two wallpaper layers: the sharp one looks exactly like the desktop; the blurred one fades
+        // in over it when the overview opens (and out when it closes), so the blur is a transition.
+        _bgSharp = new Image { Stretch = Stretch.UniformToFill, HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top };
+        RenderOptions.SetBitmapScalingMode(_bgSharp, BitmapScalingMode.HighQuality);
+        _bg = new Image { Stretch = Stretch.UniformToFill, HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top };
         RenderOptions.SetBitmapScalingMode(_bg, BitmapScalingMode.Linear);
 
         _dim = new Border { Background = Frozen(Color.FromArgb(0x5C, 0, 0, 0)) };
@@ -289,6 +294,7 @@ internal sealed class OverviewWindow : Window
         };
 
         _root = new Grid { Background = Frozen(Color.FromRgb(0x1C, 0x1C, 0x1C)) };
+        _root.Children.Add(_bgSharp);
         _root.Children.Add(_bg);
         _root.Children.Add(_dim);
         _root.Children.Add(_stage);
@@ -462,6 +468,7 @@ internal sealed class OverviewWindow : Window
             Keyboard.Focus(_search);
             UpdateLayout();
             _dpi = VisualTreeHelper.GetDpi(this).DpiScaleX;
+            PositionWallpaper();
 
             BuildTiles(items);
             LockHover();
@@ -619,6 +626,29 @@ internal sealed class OverviewWindow : Window
 
     // ------------------------------------------------------------------ background
 
+    enum WallpaperFit { Fill, Fit, Stretch, Center }
+    WallpaperFit _wallFit = WallpaperFit.Fill;
+
+    /// <summary>How Windows fits the wallpaper (Settings → Personalization → Background).</summary>
+    static WallpaperFit ReadWallpaperFit()
+    {
+        try
+        {
+            using var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Control Panel\Desktop");
+            string style = k?.GetValue("WallpaperStyle") as string ?? "10";
+            string tile = k?.GetValue("TileWallpaper") as string ?? "0";
+            if (tile == "1") return WallpaperFit.Center; // tiled: shown centred, close enough
+            return style switch
+            {
+                "6" => WallpaperFit.Fit,
+                "2" => WallpaperFit.Stretch,
+                "0" => WallpaperFit.Center,
+                _ => WallpaperFit.Fill // "10" fill, "22" span
+            };
+        }
+        catch { return WallpaperFit.Fill; }
+    }
+
     void UpdateBackground()
     {
         try
@@ -626,23 +656,79 @@ internal sealed class OverviewWindow : Window
             var sb = new StringBuilder(1024);
             Native.SystemParametersInfo(Native.SPI_GETDESKWALLPAPER, (uint)sb.Capacity, sb, 0);
             string path = sb.ToString();
-            string key = File.Exists(path) ? path + "|" + File.GetLastWriteTimeUtc(path).Ticks : "";
+            var fit = ReadWallpaperFit();
+            uint c = Native.GetSysColor(1); // COLOR_DESKTOP (0x00BBGGRR): the colour around a fitted/centred picture
+            string key = (File.Exists(path) ? path + "|" + File.GetLastWriteTimeUtc(path).Ticks : "") + "|" + fit + "|" + c;
             if (key == _bgKey) return;
             _bgKey = key;
+            _wallFit = fit;
+            _root.Background = Frozen(Color.FromRgb((byte)(c & 0xFF), (byte)((c >> 8) & 0xFF), (byte)((c >> 16) & 0xFF)));
 
-            if (key.Length == 0)
+            if (!File.Exists(path))
             {
-                uint c = Native.GetSysColor(1); // COLOR_DESKTOP (0x00BBGGRR)
-                _root.Background = Frozen(Color.FromRgb((byte)(c & 0xFF), (byte)((c >> 8) & 0xFF), (byte)((c >> 16) & 0xFF)));
                 _bg.Source = null;
+                _bgSharp.Source = null;
                 return;
             }
+            _bgSharp.Source = SharpWallpaper(path);
             _bg.Source = BlurredWallpaper(path);
         }
         catch (Exception e)
         {
             Log.Write(e);
             _bg.Source = null;
+            _bgSharp.Source = null;
+        }
+    }
+
+    /// <summary>The wallpaper at screen resolution (capped at 4K wide, so huge photos don't eat memory).</summary>
+    static BitmapSource SharpWallpaper(string path)
+    {
+        int widest = 1920;
+        foreach (var screen in System.Windows.Forms.Screen.AllScreens) widest = Math.Max(widest, screen.Bounds.Width);
+        var bi = new BitmapImage();
+        bi.BeginInit();
+        bi.UriSource = new Uri(path);
+        bi.DecodePixelWidth = Math.Min(widest, 3840);
+        bi.CacheOption = BitmapCacheOption.OnLoad;
+        bi.CreateOptions = BitmapCreateOptions.IgnoreImageCache;
+        bi.EndInit();
+        bi.Freeze();
+        return bi;
+    }
+
+    /// <summary>
+    /// Lays both wallpaper layers over the whole monitor exactly as Windows does (the overview window
+    /// may stop at the taskbar, so the monitor can start outside it), so the sharp layer lines up
+    /// with the real desktop and the open looks seamless.
+    /// </summary>
+    void PositionWallpaper()
+    {
+        double d = _dpi;
+        double left = (_monFull.Left - _mon.Left) / d, top = (_monFull.Top - _mon.Top) / d;
+        double w = _monFull.Width / d, h = _monFull.Height / d;
+
+        foreach (var layer in new[] { _bgSharp, _bg })
+        {
+            layer.Width = w;
+            layer.Height = h;
+            layer.Margin = new Thickness(left, top, 0, 0);
+        }
+        // The blurred layer always fills; the sharp one copies the desktop's fit mode.
+        _bg.Stretch = Stretch.UniformToFill;
+        switch (_wallFit)
+        {
+            case WallpaperFit.Fit: _bgSharp.Stretch = Stretch.Uniform; break;
+            case WallpaperFit.Stretch: _bgSharp.Stretch = Stretch.Fill; break;
+            case WallpaperFit.Center when _bgSharp.Source is BitmapSource src:
+                // Shown at its own pixel size, centred.
+                double iw = src.PixelWidth / d, ih = src.PixelHeight / d;
+                _bgSharp.Stretch = Stretch.Fill;
+                _bgSharp.Width = iw;
+                _bgSharp.Height = ih;
+                _bgSharp.Margin = new Thickness(left + (w - iw) / 2, top + (h - ih) / 2, 0, 0);
+                break;
+            default: _bgSharp.Stretch = Stretch.UniformToFill; break;
         }
     }
 
@@ -1407,6 +1493,8 @@ internal sealed class OverviewWindow : Window
 
     void ApplyChrome()
     {
+        _bg.Opacity = _chrome;   // blur fades in over the sharp wallpaper…
+        _dim.Opacity = _chrome;  // …and darkens
         _stage.Opacity = _chrome;
         _gridHost.Opacity = _chrome;
         _searchBorder.Opacity = _chrome;
