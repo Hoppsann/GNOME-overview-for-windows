@@ -4,12 +4,12 @@ using System.Text;
 
 namespace Overview;
 
-/// <summary>
-/// Starts things without admin rights when Overview itself runs as administrator (some people run
-/// it that way so the Windows key also works while an admin window has focus). A program Overview
-/// starts itself would inherit its admin rights, so Explorer is asked to start it instead: it then
+/// Summary:
+/// Starts apps without admin rights when Overview itself runs as administrator (some may run
+/// it that way so the Windows key wont open Start Menu while an admin window has focus). A program Overview
+/// starts itself would inherit its admin rights, so Explorer is asked to start it instead. It then
 /// runs as it would from the Start menu. When Overview isn't elevated, nothing here does anything.
-/// </summary>
+
 internal static class Unelevated
 {
     static readonly bool Elevated = IsElevated();
@@ -20,14 +20,11 @@ internal static class Unelevated
         catch { return false; }
     }
 
-    /// <summary>
     /// Has Explorer open <paramref name="file"/> (a program, shortcut, shell item or URL) the way
     /// ShellExecute would, so it runs without Overview's admin rights.
-    /// </summary>
-    /// <returns>
+
     /// True if the launch was handed to Explorer. False if Overview isn't elevated or Explorer
     /// can't be reached: the caller then starts it itself, as it always did.
-    /// </returns>
     public static bool TryStart(string file, string? arguments = null)
     {
         if (!Elevated) return false;
@@ -49,11 +46,9 @@ internal static class Unelevated
         return true;
     }
 
-    /// <summary>Quotes one command-line argument so the started program reads it back unchanged.</summary>
+    /// Quotes one command-line argument so the started program reads it back unchanged.
     public static string Quote(string argument)
     {
-        // Windows' rules: a backslash only counts in front of a quote, where each backslash
-        // (and the quote itself) needs one more backslash before it.
         var sb = new StringBuilder("\"");
         int backslashes = 0;
         foreach (char c in argument)
@@ -65,14 +60,10 @@ internal static class Unelevated
         return sb.Append('\\', backslashes * 2).Append('"').ToString();
     }
 
-    /// <summary>
-    /// Explorer's own "Shell.Application" object, reached through the desktop (which exists as
-    /// long as Explorer runs), so what it starts is started by Explorer. Null without a desktop.
-    /// The approach is from https://devblogs.microsoft.com/oldnewthing/20131118-00/?p=2643
-    /// </summary>
+    /// Explorer's own "Shell.Application" object, reached through the desktop, 
+    /// so what it starts is started by Explorer. Null without a desktop.
     static object? ExplorerShell()
     {
-        // No desktop, or one that's not responding: a call into it would never come back.
         IntPtr desktopWindow = GetShellWindow();
         if (desktopWindow == IntPtr.Zero || Native.IsHungAppWindow(desktopWindow)) return null;
 
