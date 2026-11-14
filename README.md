@@ -166,6 +166,7 @@ updates turned on pick it up from there.
 | `WebSearch.cs` / `WebSuggest.cs` | Default-browser web search and search suggestions |
 | `ShellActions.cs` | Right-click actions: run as admin, file location, properties |
 | `Launcher.cs` | Starts apps, folders and searches on a separate thread so the overview never freezes |
+| `Unelevated.cs` | If Overview runs as administrator, has Explorer start things, so they don't run as administrator too |
 | `Mru.cs` | Most-recently-used window order for the Alt+Tab-style switching |
 | `HotCorner.cs` | Optional top-left hot corner |
 | `Installer.cs` / `SetupWindow.cs` | Setup wizard, install, update and uninstall |

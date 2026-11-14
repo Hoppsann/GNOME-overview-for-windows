@@ -1,5 +1,4 @@
 using System;
-using System.Diagnostics;
 using System.Threading;
 using System.Windows;
 using System.Windows.Controls;
@@ -151,11 +150,7 @@ internal sealed class SettingsWindow : Window
             VerticalAlignment = VerticalAlignment.Center,
             TextDecorations = TextDecorations.Underline
         };
-        link.MouseLeftButtonUp += (_, _) =>
-        {
-            try { Process.Start(new ProcessStartInfo(Updater.RepoUrl + "/issues") { UseShellExecute = true }); }
-            catch (Exception e) { Log.Write(e); }
-        };
+        link.MouseLeftButtonUp += (_, _) => Launcher.Run(() => ShellActions.Launch(Updater.RepoUrl + "/issues"));
         footer.Children.Add(close);
         footer.Children.Add(link);
         root.Children.Add(footer);

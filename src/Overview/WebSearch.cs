@@ -150,8 +150,7 @@ internal static class WebSearch
         var url = EngineSearchUrl(App.Settings.SearchEngine, query);
         if (url != null)
         {
-            try { Process.Start(new ProcessStartInfo(url) { UseShellExecute = true }); }
-            catch (Exception e) { Log.Write(e); }
+            ShellActions.Launch(url);
             return;
         }
 
@@ -164,10 +163,12 @@ internal static class WebSearch
                 switch (KindOf(exe))
                 {
                     case Kind.Chromium:
-                        Process.Start(new ProcessStartInfo(exe) { ArgumentList = { "? " + query }, UseShellExecute = false });
+                        if (!Unelevated.TryStart(exe, Unelevated.Quote("? " + query)))
+                            Process.Start(new ProcessStartInfo(exe) { ArgumentList = { "? " + query }, UseShellExecute = false });
                         return;
                     case Kind.Firefox:
-                        Process.Start(new ProcessStartInfo(exe) { ArgumentList = { "--search", query }, UseShellExecute = false });
+                        if (!Unelevated.TryStart(exe, "--search " + Unelevated.Quote(query)))
+                            Process.Start(new ProcessStartInfo(exe) { ArgumentList = { "--search", query }, UseShellExecute = false });
                         return;
                 }
             }
@@ -175,10 +176,6 @@ internal static class WebSearch
         }
 
         // Unknown browser: open a search URL, which Windows hands to the default browser.
-        try
-        {
-            Process.Start(new ProcessStartInfo("https://www.google.com/search?q=" + Uri.EscapeDataString(query)) { UseShellExecute = true });
-        }
-        catch (Exception e) { Log.Write(e); }
+        ShellActions.Launch("https://www.google.com/search?q=" + Uri.EscapeDataString(query));
     }
 }
