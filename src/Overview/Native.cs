@@ -108,7 +108,8 @@ internal static class Native
     public const int GWL_STYLE = -16, GWL_EXSTYLE = -20, GCLP_HICON = -14, GCLP_HICONSM = -34;
     public const long WS_CAPTION = 0x00C00000;
     public const long WS_EX_TOOLWINDOW = 0x00000080, WS_EX_APPWINDOW = 0x00040000, WS_EX_NOACTIVATE = 0x08000000,
-                      WS_EX_LAYERED = 0x00080000, WS_EX_TRANSPARENT = 0x00000020;
+                      WS_EX_LAYERED = 0x00080000, WS_EX_TRANSPARENT = 0x00000020,
+                      WS_EX_TOPMOST = 0x00000008;
     public const uint GW_OWNER = 4;
 
     public const int DWMWA_TRANSITIONS_FORCEDISABLED = 3;
@@ -121,7 +122,7 @@ internal static class Native
                       DWM_TNP_VISIBLE = 0x8, DWM_TNP_SOURCECLIENTAREAONLY = 0x10;
 
     public const uint MONITOR_DEFAULTTONULL = 0, MONITOR_DEFAULTTONEAREST = 2;
-    public static readonly IntPtr HWND_TOPMOST = new(-1);
+    public static readonly IntPtr HWND_TOPMOST = new(-1), HWND_NOTOPMOST = new(-2);
     public const uint SWP_NOACTIVATE = 0x0010, SWP_NOZORDER = 0x0004;
     public const int SW_RESTORE = 9;
     public const uint SPI_GETDESKWALLPAPER = 0x0073;

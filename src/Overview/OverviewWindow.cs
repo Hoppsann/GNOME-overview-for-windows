@@ -460,7 +460,7 @@ internal sealed class OverviewWindow : Window
             // Cover only the work area, so the taskbar stays visible and clickable.
             _mon = Native.MonitorWorkRect(monitor);
             if (_mon.Width <= 0 || _mon.Height <= 0) _mon = _monFull;
-            ShowAutoHideTaskbar(monitor); // with auto-hide on, the work area is the whole screen: make room
+            PrepareTaskbar(monitor); // keep it visible; with auto-hide on, also make room for it
             int mw = _mon.Width, mh = _mon.Height;
 
             var items = WindowEnumerator.Enumerate(_hwnd, loadIcons: false); // missing icons load async
@@ -486,7 +486,7 @@ internal sealed class OverviewWindow : Window
             Native.SetWindowPos(_hwnd, Native.HWND_TOPMOST, _mon.Left, _mon.Top, mw, mh, 0);
             Native.ForceForeground(_hwnd);
             Activate();
-            RaiseTaskbar(); // activating the overview put it above an auto-hide taskbar
+            RaiseTaskbar(); // activating the overview put it above the taskbar
             _search.Focus();
             Keyboard.Focus(_search);
             UpdateLayout();
@@ -552,72 +552,115 @@ internal sealed class OverviewWindow : Window
         Native.DwmUnregisterThumbnail(old);
     }
 
-    // ------------------------------------------------------------------ auto-hide taskbar
+    // ------------------------------------------------------------------ taskbar
 
-    IntPtr _autoHideTaskbar;
-    int _taskbarEdge;      // 0 left, 1 top, 2 right, 3 bottom
-    int _taskbarThickness; // physical pixels
-    Thickness _taskbarInset; // physical pixels the window grid stays clear of (auto-hide taskbar on top)
+    IntPtr _taskbar;           // the taskbar on the overview's monitor, kept above the overview
+    bool _taskbarWasTopmost;   // false when a fullscreen app had pushed it behind itself
+    bool _cameFromFullscreen;  // the overview was opened from a fullscreen app
+    int _taskbarEdge;          // 0 left, 1 top, 2 right, 3 bottom (auto-hide only)
+    int _taskbarThickness;     // physical pixels (auto-hide only)
+    Thickness _taskbarInset;   // physical pixels the window grid stays clear of (auto-hide taskbar on top)
     DispatcherTimer _taskbarTimer = new() { Interval = TimeSpan.FromMilliseconds(150) };
 
     /// <summary>
-    /// With taskbar auto-hide on, the overview covers the whole screen but keeps the taskbar's strip
-    /// free, and keeps the taskbar above itself, including its thin hover edge, so pointing at the
-    /// bottom slides it up as usual. Windows 11 gives apps no clean way to show it unasked: nudging
-    /// the window is ignored and switching auto-hide off resizes everything, so neither is done.
+    /// Keeps the taskbar visible above the overview while it's open. Two cases need help:
+    /// <list type="bullet">
+    /// <item><b>A fullscreen app was in front</b> (game, video, F11 browser): Windows pushes the taskbar
+    /// behind it, and doesn't bring it back for the overview (Explorer ignores tool windows like this
+    /// one). So the taskbar is raised above the overview, and put behind the fullscreen app again
+    /// when you go back to it.</item>
+    /// <item><b>Auto-hide is on:</b> the overview covers the whole screen but keeps the taskbar's strip
+    /// free, and keeps the taskbar (including its hover edge) above itself, so pointing at the bottom
+    /// slides it up. Windows 11 gives apps no clean way to show it unasked.</item>
+    /// </list>
     /// </summary>
-    void ShowAutoHideTaskbar(IntPtr monitor)
+    void PrepareTaskbar(IntPtr monitor)
     {
-        _autoHideTaskbar = IntPtr.Zero;
+        _taskbar = IntPtr.Zero;
         _taskbarInset = new Thickness(0);
         _taskbarTimer.Stop();
-        if (!Native.IsTaskbarAutoHide()) return;
         var tb = Native.TaskbarOnMonitor(monitor);
-        if (tb == IntPtr.Zero || !Native.GetWindowRect(tb, out var r)) return;
+        if (tb == IntPtr.Zero) return;
+        _taskbar = tb;
+        _taskbarWasTopmost = (Native.GetWindowLongPtr(tb, Native.GWL_EXSTYLE).ToInt64() & Native.WS_EX_TOPMOST) != 0;
+        _cameFromFullscreen = Native.IsForegroundFullscreen(); // the app is still in front at this point
 
-        var m = _monFull;
-        bool horizontal = r.Width >= r.Height;
-        int thickness = horizontal ? r.Height : r.Width;
-        if (thickness <= 0 || thickness > (horizontal ? m.Height : m.Width) / 3) return;
-        // A hidden taskbar sits just past its screen edge, so its centre tells which edge that is.
-        _taskbarEdge = horizontal
-            ? ((r.Top + r.Bottom) / 2 > (m.Top + m.Bottom) / 2 ? 3 : 1)
-            : ((r.Left + r.Right) / 2 > (m.Left + m.Right) / 2 ? 2 : 0);
-        _taskbarThickness = thickness;
-        _autoHideTaskbar = tb;
-
-        // Cover the whole screen, including behind the taskbar. The taskbar is see-through, so if the
-        // overview stopped short of it, it would show the (maybe bright) app window behind it instead
-        // of the overview's background. Windows are kept clear of it with an inset instead.
-        _mon = m;
-        switch (_taskbarEdge)
+        if (Native.IsTaskbarAutoHide() && Native.GetWindowRect(tb, out var r))
         {
-            case 0: _taskbarInset.Left = thickness; break;
-            case 1: _mon.Top = m.Top + thickness; break; // top: the search bar must stay below it
-            case 2: _taskbarInset.Right = thickness; break;
-            default: _taskbarInset.Bottom = thickness; break;
+            var m = _monFull;
+            bool horizontal = r.Width >= r.Height;
+            int thickness = horizontal ? r.Height : r.Width;
+            if (thickness > 0 && thickness <= (horizontal ? m.Height : m.Width) / 3)
+            {
+                // A hidden taskbar sits just past its screen edge, so its centre tells which edge that is.
+                _taskbarEdge = horizontal
+                    ? ((r.Top + r.Bottom) / 2 > (m.Top + m.Bottom) / 2 ? 3 : 1)
+                    : ((r.Left + r.Right) / 2 > (m.Left + m.Right) / 2 ? 2 : 0);
+                _taskbarThickness = thickness;
+
+                // Cover the whole screen, including behind the taskbar. The taskbar is see-through, so if
+                // the overview stopped short of it, it would show the (maybe bright) app window behind it
+                // instead of the overview's background. Windows are kept clear of it with an inset instead.
+                _mon = m;
+                switch (_taskbarEdge)
+                {
+                    case 0: _taskbarInset.Left = thickness; break;
+                    case 1: _mon.Top = m.Top + thickness; break; // top: the search bar must stay below it
+                    case 2: _taskbarInset.Right = thickness; break;
+                    default: _taskbarInset.Bottom = thickness; break;
+                }
+            }
         }
 
         _taskbarTimer.Tick -= OnTaskbarTimer;
         _taskbarTimer.Tick += OnTaskbarTimer;
         _taskbarTimer.Start();
-        Log.Write($"auto-hide taskbar: edge {_taskbarEdge}, {thickness}px, kept above the overview");
+        if (_cameFromFullscreen || !_taskbarWasTopmost)
+            Log.Write($"opened from fullscreen (taskbar topmost: {_taskbarWasTopmost}): taskbar raised above the overview");
     }
 
     /// <summary>Only changes z-order, never the taskbar's position or state, so Explorer's own
     /// show/hide on hover keeps working undisturbed.</summary>
     void OnTaskbarTimer(object? sender, EventArgs e)
     {
-        if (_state != State.Open || _autoHideTaskbar == IntPtr.Zero) { _taskbarTimer.Stop(); return; }
-        if (!Native.IsAbove(_autoHideTaskbar, _hwnd)) RaiseTaskbar();
+        if (_state != State.Open || _taskbar == IntPtr.Zero) { _taskbarTimer.Stop(); return; }
+        if (!Native.IsAbove(_taskbar, _hwnd)) RaiseTaskbar();
     }
 
-    /// <summary>Puts the taskbar back above the overview (activating the overview puts it on top).</summary>
+    /// <summary>Puts the taskbar above the overview (activating the overview puts it on top).</summary>
     void RaiseTaskbar()
     {
-        if (_autoHideTaskbar == IntPtr.Zero) return;
-        Native.SetWindowPos(_autoHideTaskbar, Native.HWND_TOPMOST, 0, 0, 0, 0,
+        if (_taskbar == IntPtr.Zero) return;
+        Native.SetWindowPos(_taskbar, Native.HWND_TOPMOST, 0, 0, 0, 0,
             Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE);
+    }
+
+    /// <summary>
+    /// After closing: if a fullscreen app had pushed the taskbar behind itself and you're back in a
+    /// fullscreen app now, put the taskbar behind it again, so it doesn't sit on top of your game or
+    /// video. In a normal window the taskbar belongs on top, so then it's left as it is.
+    /// </summary>
+    void RestoreTaskbar()
+    {
+        var tb = _taskbar;
+        _taskbar = IntPtr.Zero;
+        if (tb == IntPtr.Zero || (!_cameFromFullscreen && _taskbarWasTopmost)) return;
+        PutTaskbarBehindFullscreen(tb);
+        // The window you switched to may take a moment to come to the front: check once more.
+        var again = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(400) };
+        again.Tick += (_, _) => { again.Stop(); if (_state == State.Hidden) PutTaskbarBehindFullscreen(tb); };
+        again.Start();
+    }
+
+    void PutTaskbarBehindFullscreen(IntPtr tb)
+    {
+        var fg = Native.GetForegroundWindow();
+        if (fg == IntPtr.Zero || fg == _hwnd || !Native.IsForegroundFullscreen()) return;
+        if (!Native.IsAbove(tb, fg)) return; // already behind it
+        const uint flags = Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE;
+        Native.SetWindowPos(tb, Native.HWND_NOTOPMOST, 0, 0, 0, 0, flags);
+        Native.SetWindowPos(tb, fg, 0, 0, 0, 0, flags); // just behind the fullscreen app
+        Log.Write("back in a fullscreen app: taskbar put behind it again");
     }
 
     void FinishHide()
@@ -625,6 +668,7 @@ internal sealed class OverviewWindow : Window
         StopRendering();
         Hide();
         _taskbarTimer.Stop();
+        RestoreTaskbar();
         Select(null); // also clears the highlight on a reused app-grid tile
         if (_gridMode) LeaveGrid();
         ClearChips();
