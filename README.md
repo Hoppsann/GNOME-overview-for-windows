@@ -29,6 +29,12 @@ then tap the Windows key again to jump straight there.
   folders from the Windows Search index and your recent files, in a row of their own. Apps are found by
   their exe name too (`cmd`, `regedit`), and Run-dialog commands and paths work (`winver`,
   `services.msc`, `%appdata%`, `C:\Users`). Fuzzy matching works: `vsc` finds Visual Studio Code.
+- **More from search.** Your user folders, drives (`c:`), This PC and Recycle Bin; text inside your
+  documents; arithmetic (`12*7,5` shows the answer, Enter copies it); website addresses (`vg.no` opens
+  the site); and *Shut down*, *Restart*, *Sleep*, *Lock*, *Sign out* and *Switch user* (the first three
+  ask before they act).
+- **Filters, like Start's.** Start with `apps:`, `settings:`, `docs:`, `folders:`, `photos:`,
+  `music:`, `videos:` or `web:` to search only that. A file filter alone (`photos:`) shows the newest.
 - **Learns what you use.** Results you picked before for the same letters come first (the latest pick
   wins), and apps you use a lot rank higher. If you open Command Prompt after typing `c`, then `c`
   alone brings it up next time.

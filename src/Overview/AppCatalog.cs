@@ -9,7 +9,7 @@ using System.Windows.Media;
 namespace Overview;
 
 /// <summary>What a search result is. Everything but App comes from <see cref="SearchSources"/>.</summary>
-internal enum EntryKind { App, Setting, ControlPanel, Command, File, Folder }
+internal enum EntryKind { App, Setting, ControlPanel, Command, File, Folder, Power, Calc }
 
 internal sealed class AppEntry
 {
@@ -129,6 +129,8 @@ internal static class AppCatalog
             foreach (var e in SearchSources.LoadControlPanel())
                 if (names.Add(e.Name)) extras.Add(e);
         }
+        catch (Exception e) { Log.Write(e); }
+        try { extras.AddRange(SearchSources.LoadPlaces()); }
         catch (Exception e) { Log.Write(e); }
         return extras;
     }
@@ -283,21 +285,22 @@ internal static class AppCatalog
         return !(n.StartsWith("uninstall") || n.Contains("readme") || n.Contains("read me") || n.EndsWith(" uninstaller"));
     }
 
-    public static string ParsingName(AppEntry a) => a.Kind switch
+    public static string? ParsingName(AppEntry a) => a.Kind switch
     {
         EntryKind.App => a.IsShellApp ? @"shell:AppsFolder\" + a.Id : a.Id,
         EntryKind.Setting => SearchSources.SettingsAppParsingName,
+        EntryKind.Power or EntryKind.Calc => null, // glyph only
         _ => a.Target ?? a.Id
     };
 
-    public static ImageSource? Icon(AppEntry a, int px) => IconLoader.ForParsingName(ParsingName(a), px);
+    public static ImageSource? Icon(AppEntry a, int px) => ParsingName(a) is string n ? IconLoader.ForParsingName(n, px) : null;
 
     public static void Launch(AppEntry a)
     {
         if (a.Kind != EntryKind.App) { SearchSources.Open(a); return; }
         try
         {
-            Process.Start(new ProcessStartInfo(ParsingName(a)) { UseShellExecute = true });
+            Process.Start(new ProcessStartInfo(ParsingName(a)!) { UseShellExecute = true });
         }
         catch (Exception e)
         {

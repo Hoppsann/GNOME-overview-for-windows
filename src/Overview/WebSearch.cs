@@ -1,3 +1,5 @@
+using System.Linq;
+using System.Collections.Generic;
 using System;
 using System.Diagnostics;
 using System.IO;
@@ -140,6 +142,41 @@ internal static class WebSearch
         "brave" => "https://search.brave.com/search?q=" + Uri.EscapeDataString(query),
         _ => null
     };
+
+    // Common top-level domains: "report.docx" or "main.py" mustn't be taken for a website.
+    static readonly HashSet<string> Tlds = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "com", "net", "org", "io", "dev", "app", "ai", "co", "me", "tv", "gg", "info", "edu", "gov", "xyz", "site", "online",
+        "store", "shop", "blog", "tech", "cloud", "page", "games", "news", "live", "wiki", "biz", "eu", "uk", "us", "ca", "au",
+        "no", "se", "dk", "fi", "is", "de", "nl", "be", "fr", "es", "it", "pt", "ch", "at", "pl", "cz", "ie", "jp", "kr", "cn",
+        "in", "br", "mx", "ru", "ua", "nz", "za", "ly", "to", "fm", "sh", "so", "gl", "lol", "moe", "social"
+    };
+
+    /// <summary>
+    /// The address to open if the text is one ("youtube.com", "www.vg.no/sport", "https://…",
+    /// "localhost:3000"), else null. Start opens these too, instead of searching for them.
+    /// </summary>
+    public static string? AsUrl(string text)
+    {
+        string t = text.Trim();
+        if (t.Length < 4 || t.Contains(' ')) return null;
+        if (t.StartsWith("http://", StringComparison.OrdinalIgnoreCase) || t.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            return Uri.TryCreate(t, UriKind.Absolute, out _) ? t : null;
+        if (System.Text.RegularExpressions.Regex.IsMatch(t, @"^localhost(:\d+)?(/.*)?$", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+            return "http://" + t;
+        if (!Uri.TryCreate("https://" + t, UriKind.Absolute, out var uri)) return null;
+        string host = uri.Host;
+        int dot = host.LastIndexOf('.');
+        if (dot <= 0 || dot == host.Length - 1) return null;
+        if (host.Count(c => c == '.') == 3 && System.Net.IPAddress.TryParse(host, out _)) return "http://" + t; // 192.168.1.1: a router page
+        return Tlds.Contains(host.Substring(dot + 1)) ? "https://" + t : null;
+    }
+
+    public static void OpenUrl(string url)
+    {
+        try { Process.Start(new ProcessStartInfo(url) { UseShellExecute = true }); }
+        catch (Exception e) { Log.Write(e); }
+    }
 
     public static void Run(string query)
     {

@@ -1169,13 +1169,13 @@ internal sealed class OverviewWindow : Window
     void QueueSuggestions()
     {
         _suggestTimer.Stop();
-        if (!SuggestionsOn || !Searching || _search.Text.Trim().Length < 2) { ClearChips(); return; }
+        if (!SuggestionsOn || !WebScope || WebText.Length < 2 || WebSearch.AsUrl(WebText) != null) { ClearChips(); return; }
         _suggestTimer.Start();
     }
 
     async void FetchSuggestions()
     {
-        string query = _search.Text.Trim();
+        string query = WebText;
         _suggestCts?.Cancel();
         var cts = new System.Threading.CancellationTokenSource();
         _suggestCts = cts;
@@ -1185,7 +1185,7 @@ internal sealed class OverviewWindow : Window
         catch (Exception e) { Log.Write("suggestions: " + e.Message); return; }
 
         // Ignore answers that arrive after the user typed more, closed the overview, or opened the grid.
-        if (cts.IsCancellationRequested || _state != State.Open || _gridMode || _search.Text.Trim() != query) return;
+        if (cts.IsCancellationRequested || _state != State.Open || _gridMode || WebText != query) return;
         ShowChips(list);
     }
 
@@ -1364,7 +1364,7 @@ internal sealed class OverviewWindow : Window
         menu.Items.Add(MenuEntry("Open", "", () => LaunchApp(a)));
         if (!store)
             menu.Items.Add(MenuEntry("Run as administrator", "",
-                () => RunAndClose(() => ShellActions.RunAsAdmin(file ?? AppCatalog.ParsingName(app)))));
+                () => RunAndClose(() => ShellActions.RunAsAdmin(file ?? AppCatalog.ParsingName(app)!))));
         if (ShellActions.CanOpenLocation(file))
             menu.Items.Add(MenuEntry("Open file location", "", () => RunAndClose(() => ShellActions.OpenFileLocation(file!))));
         menu.Items.Add(new Separator());
@@ -1444,6 +1444,8 @@ internal sealed class OverviewWindow : Window
                 EntryKind.Folder => "\uE8B7",                             // folder
                 EntryKind.File => "\uE8A5",                               // document
                 EntryKind.Command => "\uE756",                            // command prompt
+                EntryKind.Power => SearchSources.PowerGlyph(a.App),
+                EntryKind.Calc => "\uE8EF",                               // calculator
                 _ => "\uE71D"                                             // generic app
             },
             FontFamily = IconFont,
@@ -1472,7 +1474,9 @@ internal sealed class OverviewWindow : Window
         img.Margin = new Thickness(0, 12, 0, 7);
         img.HorizontalAlignment = HorizontalAlignment.Center;
 
-        string label = a.IsWeb ? $"Search the web for “{_search.Text.Trim()}”" : a.App.Name;
+        string label = !a.IsWeb ? a.App.Name
+                     : WebSearch.AsUrl(WebText) is string url ? $"Open {url.Replace("https://", "")}"
+                     : $"Search the web for “{WebText}”";
         var name = new TextBlock
         {
             Text = label,
@@ -1689,12 +1693,15 @@ internal sealed class OverviewWindow : Window
         // Ranking = how well the text matches + what you've used (Usage): what you picked for
         // these letters before (most recent first), and how often/recently you use the app.
         string query = _search.Text;
-        var tokens = Search.Tokenize(query);
+        var (scope, text) = SearchSources.ParseScope(query);
+        bool all = scope == SearchSources.Scope.All;
+        var tokens = Search.Tokenize(text);
         Tile? bestTile = null;
         double bestTileMatch = 0;
         foreach (var t in _tiles)
         {
-            if (tokens.Length == 0) { t.Visible = true; t.Score = 0; continue; }
+            if (tokens.Length == 0 && all) { t.Visible = true; t.Score = 0; continue; }
+            if (!all) { t.Visible = false; t.Score = 0; continue; } // a filter ("photos:") hides the windows
             double match = Math.Max(Search.Score(tokens, t.Win.Title),
                            Math.Max(Search.Score(tokens, t.Win.AppName),
                                     Search.Score(tokens, t.Win.ProcName) * 0.9));
@@ -1706,12 +1713,25 @@ internal sealed class OverviewWindow : Window
 
         ClearApps();
         double bestAppMatch = 0;
-        if (tokens.Length > 0)
+        AppEntry? calc = all ? SearchSources.Calculate(text) : null;
+        if (calc != null)
         {
-            // Apps, then what else Start's search finds: Windows Tools, Settings pages, Control Panel,
-            // and Run-dialog commands and paths ("regedit", "%appdata%").
-            var candidates = AppCatalog.Apps.Concat(AppCatalog.Extras).Concat(SearchSources.SettingsPages);
-            var command = SearchSources.MatchCommand(query);
+            // Arithmetic: the answer comes first, and Enter copies it.
+            var tile = new AppTile(calc, 1000);
+            CreateAppVisuals(tile, _stage);
+            _apps.Add(tile);
+        }
+        if (tokens.Length > 0 && scope is SearchSources.Scope.All or SearchSources.Scope.Apps or SearchSources.Scope.Settings)
+        {
+            // Apps, then what else Start's search finds: Windows Tools, places and drives, Settings pages,
+            // Control Panel, power actions, and Run-dialog commands and paths ("regedit", "%appdata%").
+            IEnumerable<AppEntry> candidates = scope switch
+            {
+                SearchSources.Scope.Apps => AppCatalog.Apps.Concat(AppCatalog.Extras.Where(e => e.Kind == EntryKind.App)),
+                SearchSources.Scope.Settings => SearchSources.SettingsPages.Concat(AppCatalog.Extras.Where(e => e.Kind == EntryKind.ControlPanel)),
+                _ => AppCatalog.Apps.Concat(AppCatalog.Extras).Concat(SearchSources.SettingsPages).Concat(SearchSources.PowerActions)
+            };
+            var command = all ? SearchSources.MatchCommand(text) : null;
             if (command != null)
             {
                 // Typing an app's exe name finds the app itself already ("regedit" → Registry Editor).
@@ -1727,7 +1747,7 @@ internal sealed class OverviewWindow : Window
                 .Select(x => (x.a, x.m, s: x.m + Usage.Bonus(x.a.Id, query)))
                 .OrderByDescending(x => x.s)
                 .ThenBy(x => x.a.Name.Length)
-                .Take(Math.Min(MaxAppResults, AppTilesThatFit()) - 1) // - 1: room for the web search tile
+                .Take(Math.Min(MaxAppResults, AppTilesThatFit()) - (all ? 1 : 0) - (calc != null ? 1 : 0)) // room for web/answer
                 .ToList();
             foreach (var (a, m, s) in matches)
             {
@@ -1736,6 +1756,9 @@ internal sealed class OverviewWindow : Window
                 _apps.Add(tile);
                 bestAppMatch = Math.Max(bestAppMatch, m);
             }
+        }
+        if (tokens.Length > 0 && WebScope)
+        {
             // Always offer a web search as the last result.
             var web = new AppTile(WebEntry, 0) { IsWeb = true };
             CreateAppVisuals(web, _stage);
@@ -1751,7 +1774,9 @@ internal sealed class OverviewWindow : Window
 
         // Default selection (what Enter does): the best window or app match, unless nothing
         // matches well, e.g. "how many days until christmas", then the web search.
-        if (tokens.Length == 0) { SelectDefault(); return; } // search cleared: back to the previous window
+        if (tokens.Length == 0 && all) { SelectDefault(); return; } // search cleared: back to the previous window
+        if (calc != null) { Select(_apps[0]); _defaultSel = _sel; return; }
+        if (scope == SearchSources.Scope.Web && WebSearch.AsUrl(text) == null && _apps.Count > 0) { Select(_apps[^1]); _defaultSel = _sel; return; }
         var bestApp = _apps.FirstOrDefault(a => !a.IsWeb); // already sorted best-first
         double appScore = bestApp?.Score ?? 0, winScore = bestTile?.Score ?? 0;
         bool keepFile = _sel is AppTile { IsFile: true } && !ReferenceEquals(_sel, _defaultSel); // picked by you
@@ -1760,8 +1785,9 @@ internal sealed class OverviewWindow : Window
         else if (Math.Max(bestAppMatch, bestTileMatch) < WebThreshold)
         {
             var file = _files.FirstOrDefault();
-            if (file != null && file.Score >= WebThreshold) Select(file);
-            else Select(_apps.First(a => a.IsWeb));
+            var webTile = _apps.FirstOrDefault(a => a.IsWeb);
+            if (file != null && (file.Score >= WebThreshold || webTile == null)) Select(file);
+            else Select(webTile ?? bestApp);
         }
         else if (bestTile != null && winScore >= appScore) Select(bestTile);
         else if (bestApp != null && OpenWindowOf(bestApp) is Tile open) Select(open); // already open: switch, don't start another
@@ -1774,13 +1800,22 @@ internal sealed class OverviewWindow : Window
     const int MaxFileResults = 8;
     bool FilesOn => App.Settings.SearchFiles && !_gridMode;
 
+    /// <summary>Whether this search looks for files: two letters or more, or a file filter ("photos:") alone.</summary>
+    bool WantsFiles()
+    {
+        if (!FilesOn) return false;
+        var (scope, text) = Scoped;
+        if (SearchSources.IsFileScope(scope)) return true;
+        return scope == SearchSources.Scope.All && text.Trim().Length >= 2 && SearchSources.Calculate(text) == null;
+    }
+
     /// <summary>Drops file results that no longer match what's typed, at once (new ones follow shortly).</summary>
     void FilterFiles(string[] tokens)
     {
-        if (!FilesOn || tokens.Length == 0 || _search.Text.Trim().Length < 2) { ClearFiles(); return; }
+        if (!WantsFiles()) { ClearFiles(); return; }
         foreach (var f in _files.ToList())
         {
-            if (Search.Score(tokens, f.App.Name) > 0) continue;
+            if (tokens.Length == 0 || Search.Score(tokens, f.App.Name) > 0 || f.Score < WebThreshold) continue;
             _stage.Children.Remove(f.Root);
             if (ReferenceEquals(_sel, f)) _sel = null;
             _files.Remove(f);
@@ -1790,28 +1825,29 @@ internal sealed class OverviewWindow : Window
     void QueueFiles()
     {
         _fileTimer.Stop();
-        if (!FilesOn || _search.Text.Trim().Length < 2) return;
-        _fileTimer.Start();
+        if (WantsFiles()) _fileTimer.Start();
     }
 
     void FetchFiles()
     {
-        if (_state != State.Open || !FilesOn) return;
-        string query = _search.Text;
-        if (query.Trim().Length < 2) return;
+        if (_state != State.Open || !WantsFiles()) return;
         int max = Math.Min(MaxFileResults, AppTilesThatFit());
-        SearchSources.FindFiles(query, max, ShowFiles);
+        SearchSources.FindFiles(_search.Text, max, ShowFiles);
     }
 
     void ShowFiles(string query, List<SearchSources.FileHit> hits)
     {
         // Ignore answers to text that's no longer in the box, or that arrive after closing.
-        if (_state != State.Open || !FilesOn || _search.Text != query) return;
+        if (_state != State.Open || !WantsFiles() || _search.Text != query) return;
         int max = Math.Min(MaxFileResults, AppTilesThatFit());
         int selIndex = _sel is AppTile st && _files.Contains(st) ? _files.IndexOf(st) : -1;
         bool wasDefault = ReferenceEquals(_sel, _defaultSel);
         ClearFiles();
+        // Places already in the row above (Downloads, a drive) aren't shown twice.
+        var above = new HashSet<string>(_apps.Where(x => x.App.Target != null).Select(x => x.App.Target!.TrimEnd('\\')),
+                                         StringComparer.OrdinalIgnoreCase);
         var ranked = hits
+            .Where(h => !above.Contains(h.Entry.Target!.TrimEnd('\\')))
             .Select(h => (h.Entry, s: h.Score + Usage.Bonus(h.Entry.Id, query)))
             .OrderByDescending(x => x.s)
             .Take(max);
@@ -1828,10 +1864,11 @@ internal sealed class OverviewWindow : Window
         if (selIndex >= 0 && _files.Count > 0) Select(_files[Math.Min(selIndex, _files.Count - 1)]);
         else if (wasDefault || _sel == null)
         {
-            // Nothing else matched well, but a file does: make it what Enter opens.
+            // Nothing else matched well, but a file does (or only files are wanted): make it what Enter opens.
+            bool onlyFiles = SearchSources.IsFileScope(Scoped.Scope);
             bool webDefault = _sel is AppTile { IsWeb: true } || _sel == null;
             var best = _files.FirstOrDefault();
-            if (webDefault && best != null && best.Score >= WebThreshold) { Select(best); _defaultSel = best; }
+            if (webDefault && best != null && (onlyFiles || best.Score >= WebThreshold)) { Select(best); _defaultSel = best; }
         }
     }
 
@@ -1868,6 +1905,14 @@ internal sealed class OverviewWindow : Window
         _tiles.Where(t => t.Visible).OrderByDescending(t => t.Mru).ThenBy(t => t.ZIndex).ToList();
 
     bool Searching => _search.Text.Trim().Length > 0;
+
+    /// <summary>The search with a filter word split off: "photos: beach" → (Photos, "beach").</summary>
+    (SearchSources.Scope Scope, string Text) Scoped => SearchSources.ParseScope(_search.Text);
+
+    /// <summary>The text that goes to the web: what's typed, minus a filter word.</summary>
+    string WebText => Scoped.Text.Trim();
+
+    bool WebScope => Scoped.Scope is SearchSources.Scope.All or SearchSources.Scope.Web;
 
     Rect BoundsOf(object o) => o switch
     {
@@ -2107,8 +2152,20 @@ internal sealed class OverviewWindow : Window
         // Started on another thread (Store apps can take seconds), allowed to take focus.
         var app = a.App;
         string query = _search.Text;
+        if (app.Kind == EntryKind.Calc)
+        {
+            try { Clipboard.SetText(app.Target ?? ""); } catch (Exception e) { Log.Write(e); }
+            Dismiss(null);
+            return;
+        }
         if (!a.IsWeb) Usage.RecordPick(app.Id, query); // search learns: these letters → this app
-        if (a.IsWeb) Launcher.Run(() => WebSearch.Run(query));
+        if (a.IsWeb)
+        {
+            string text = WebText;
+            string? url = WebSearch.AsUrl(text);
+            if (url != null) Launcher.Run(() => WebSearch.OpenUrl(url)); // "youtube.com": go there, don't search for it
+            else Launcher.Run(() => WebSearch.Run(text));
+        }
         else Launcher.Run(() => AppCatalog.Launch(app));
         Dismiss(null);
     }

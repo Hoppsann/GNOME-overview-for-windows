@@ -40,6 +40,8 @@ internal static class SearchSources
         {
             EntryKind.Setting => 0.92,
             EntryKind.ControlPanel => 0.86,
+            EntryKind.Power => 0.8,   // only when typed (nearly) in full: Enter on "Restart" by accident would hurt
+            EntryKind.Folder or EntryKind.Command => 0.9,
             _ => 1.0
         };
     }
@@ -58,6 +60,316 @@ internal static class SearchSources
         return whole ? 70 : 64;
     }
 
+    // ------------------------------------------------------------------ filters
+
+    /// <summary>What a search is limited to, like Start's filters ("photos: beach", "settings: mouse").</summary>
+    public enum Scope { All, Apps, Settings, Documents, Folders, Photos, Music, Videos, Web }
+
+    static readonly (string Prefix, Scope Scope)[] Prefixes =
+    {
+        ("apps", Scope.Apps), ("app", Scope.Apps),
+        ("settings", Scope.Settings), ("setting", Scope.Settings),
+        ("documents", Scope.Documents), ("document", Scope.Documents), ("docs", Scope.Documents), ("doc", Scope.Documents),
+        ("folders", Scope.Folders), ("folder", Scope.Folders),
+        ("photos", Scope.Photos), ("photo", Scope.Photos), ("pictures", Scope.Photos), ("picture", Scope.Photos), ("images", Scope.Photos),
+        ("music", Scope.Music), ("songs", Scope.Music),
+        ("videos", Scope.Videos), ("video", Scope.Videos),
+        ("web", Scope.Web),
+    };
+
+    /// <summary>Splits off a filter word with a colon at the start: "photos: beach" → (Photos, "beach").</summary>
+    public static (Scope Scope, string Text) ParseScope(string query)
+    {
+        string q = query.TrimStart();
+        int colon = q.IndexOf(':');
+        if (colon < 2 || colon > 10) return (Scope.All, query);
+        string word = q.Substring(0, colon).ToLowerInvariant();
+        foreach (var (prefix, scope) in Prefixes)
+            if (word == prefix) return (scope, q.Substring(colon + 1).TrimStart());
+        return (Scope.All, query);
+    }
+
+    public static bool IsFileScope(Scope s) => s is Scope.Documents or Scope.Folders or Scope.Photos or Scope.Music or Scope.Videos;
+
+    /// <summary>The Windows Search "kind" for a filter, and the extensions used for recent files.</summary>
+    static (string Kind, string[] Exts)? KindOf(Scope s) => s switch
+    {
+        Scope.Documents => ("document", new[] { ".pdf", ".doc", ".docx", ".odt", ".rtf", ".txt", ".md", ".xls", ".xlsx", ".ods", ".csv", ".ppt", ".pptx", ".odp" }),
+        Scope.Photos => ("picture", new[] { ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".heic", ".tif", ".tiff", ".raw", ".cr2", ".cr3", ".nef", ".arw", ".dng", ".svg", ".ico" }),
+        Scope.Music => ("music", new[] { ".mp3", ".flac", ".wav", ".m4a", ".aac", ".ogg", ".wma", ".opus" }),
+        Scope.Videos => ("video", new[] { ".mp4", ".mkv", ".mov", ".avi", ".wmv", ".webm", ".m4v", ".mts" }),
+        Scope.Folders => ("folder", Array.Empty<string>()),
+        _ => null
+    };
+
+    // ------------------------------------------------------------------ places and drives
+
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    static extern int SHGetKnownFolderPath(ref Guid id, uint flags, IntPtr token, out IntPtr path);
+
+    static string? KnownFolder(string guid)
+    {
+        var id = new Guid(guid);
+        if (SHGetKnownFolderPath(ref id, 0, IntPtr.Zero, out var p) != 0 || p == IntPtr.Zero) return null;
+        try { return Marshal.PtrToStringUni(p); }
+        finally { Marshal.FreeCoTaskMem(p); }
+    }
+
+    /// <summary>
+    /// Places Start finds by name: your user folders (Downloads, Documents…), This PC, Recycle Bin,
+    /// Network, and your drives ("Local Disk (C:)", also found by typing "c:"). Background thread.
+    /// </summary>
+    public static List<AppEntry> LoadPlaces()
+    {
+        var list = new List<AppEntry>();
+        void Folder(string name, string? path, string keywords)
+        {
+            if (string.IsNullOrEmpty(path) || !Directory.Exists(path)) return;
+            list.Add(new AppEntry { Name = name, Id = "file:" + path.ToLowerInvariant(), Target = path, Kind = EntryKind.Folder, Keywords = keywords, Detail = path });
+        }
+        void Shell(string name, string target, string keywords) =>
+            list.Add(new AppEntry { Name = name, Id = "cmd:" + target.ToLowerInvariant(), Target = target, Kind = EntryKind.Command, Keywords = keywords, Detail = name });
+
+        Folder("Desktop", Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "desktop");
+        Folder("Documents", Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "documents my documents");
+        Folder("Downloads", KnownFolder("374DE290-123F-4565-9164-39C4925E467B"), "downloads");
+        Folder("Pictures", Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), "pictures photos");
+        Folder("Music", Environment.GetFolderPath(Environment.SpecialFolder.MyMusic), "music");
+        Folder("Videos", Environment.GetFolderPath(Environment.SpecialFolder.MyVideos), "videos");
+        string profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        Folder(Path.GetFileName(profile), profile, "user folder home profile");
+        Shell("This PC", "shell:MyComputerFolder", "this pc computer my computer drives");
+        Shell("Recycle Bin", "shell:RecycleBinFolder", "recycle bin trash deleted");
+        Shell("Network", "shell:NetworkPlacesFolder", "network");
+        Shell("File Explorer Home", "shell:::{f874310e-b6b7-47dc-bc84-b9e6b38f5903}", "quick access home explorer");
+
+        foreach (var d in DriveInfo.GetDrives())
+        {
+            try
+            {
+                if (d.DriveType is not (DriveType.Fixed or DriveType.Removable) || !d.IsReady) continue;
+                string letter = d.Name.Substring(0, 2); // "C:"
+                string label = string.IsNullOrWhiteSpace(d.VolumeLabel)
+                    ? (d.DriveType == DriveType.Removable ? "USB Drive" : "Local Disk")
+                    : d.VolumeLabel;
+                list.Add(new AppEntry
+                {
+                    Name = $"{label} ({letter})",
+                    Id = "file:" + d.Name.ToLowerInvariant(),
+                    Target = d.Name,
+                    Kind = EntryKind.Folder,
+                    Keywords = $"{letter.ToLowerInvariant()} {letter[0]}-drive drive disk",
+                    Detail = d.Name
+                });
+            }
+            catch { }
+        }
+        return list;
+    }
+
+    // ------------------------------------------------------------------ power
+
+    static AppEntry Power(string name, string action, string keywords) => new()
+    {
+        Name = name,
+        Id = "power:" + action,
+        Target = action,
+        Kind = EntryKind.Power,
+        Keywords = keywords,
+        Detail = name
+    };
+
+    /// <summary>What Start's power button and account menu do.</summary>
+    public static readonly IReadOnlyList<AppEntry> PowerActions = new[]
+    {
+        Power("Shut down", "shutdown", "shutdown power off turn off"),
+        Power("Restart", "restart", "reboot"),
+        Power("Sleep", "sleep", "suspend standby"),
+        Power("Lock", "lock", "lock screen"),
+        Power("Sign out", "signout", "log out logout log off logoff"),
+        Power("Switch user", "switchuser", "change user"),
+    };
+
+    public static string PowerGlyph(AppEntry a) => a.Target switch
+    {
+        "restart" => "\uE777",
+        "sleep" => "\uE708",
+        "lock" => "\uE72E",
+        "signout" => "\uF3B1",
+        "switchuser" => "\uE748",
+        _ => "\uE7E8"
+    };
+
+    [DllImport("user32.dll")] static extern bool LockWorkStation();
+    [DllImport("user32.dll")] static extern bool ExitWindowsEx(uint flags, uint reason);
+    [DllImport("powrprof.dll")] static extern bool SetSuspendState(bool hibernate, bool force, bool disableWakeEvent);
+    [DllImport("wtsapi32.dll")] static extern bool WTSDisconnectSession(IntPtr server, int sessionId, bool wait);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int MessageBoxW(IntPtr hwnd, string text, string caption, uint type);
+    [DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr hwnd, uint msg, IntPtr w, IntPtr l);
+
+    /// <summary>Runs a power action. Shutting down, restarting and signing out ask first, since an
+    /// Enter too many could otherwise cost unsaved work. Call on the launcher thread.</summary>
+    static void RunPower(string action)
+    {
+        string? ask = action switch
+        {
+            "shutdown" => "Shut down the PC now?",
+            "restart" => "Restart the PC now?",
+            "signout" => "Sign out now?",
+            _ => null
+        };
+        if (ask != null)
+        {
+            const uint MB_YESNO = 0x4, MB_ICONQUESTION = 0x20, MB_TOPMOST = 0x40000, MB_SETFOREGROUND = 0x10000;
+            if (MessageBoxW(IntPtr.Zero, ask + "\n\nApps with unsaved work may ask you to save first.", "Overview",
+                    MB_YESNO | MB_ICONQUESTION | MB_TOPMOST | MB_SETFOREGROUND) != 6) return; // IDYES
+        }
+        Log.Write("power: " + action);
+        switch (action)
+        {
+            case "shutdown":
+                // Like Start: a "hybrid" shutdown, so Fast Startup still works. Plain if that's unavailable.
+                if (RunShutdown("/s /hybrid /t 0") != 0) RunShutdown("/s /t 0");
+                break;
+            case "restart":
+                RunShutdown("/r /t 0");
+                break;
+            case "signout":
+                ExitWindowsEx(0 /* EWX_LOGOFF */, 0);
+                break;
+            case "lock":
+                LockWorkStation();
+                break;
+            case "switchuser":
+                // Disconnecting the session shows the sign-in screen, where you pick another user.
+                if (!WTSDisconnectSession(IntPtr.Zero, -1, false)) LockWorkStation();
+                break;
+            case "sleep":
+                // "Modern standby" PCs (most laptops) sleep when the screen turns off; others have classic sleep.
+                if (ModernStandby() || !SetSuspendState(false, false, false))
+                    SendMessage(new IntPtr(0xFFFF), 0x0112 /* WM_SYSCOMMAND */, new IntPtr(0xF170) /* SC_MONITORPOWER */, new IntPtr(2));
+                break;
+        }
+    }
+
+    [DllImport("powrprof.dll")] static extern bool GetPwrCapabilities(byte[] capabilities);
+
+    /// <summary>SYSTEM_POWER_CAPABILITIES.AoAc (byte 20): the PC uses modern standby instead of S3 sleep.</summary>
+    static bool ModernStandby()
+    {
+        try
+        {
+            var caps = new byte[256];
+            return GetPwrCapabilities(caps) && caps[20] != 0;
+        }
+        catch { return false; }
+    }
+
+    static int RunShutdown(string args)
+    {
+        try
+        {
+            using var p = Process.Start(new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "shutdown.exe"), args)
+            { UseShellExecute = false, CreateNoWindow = true });
+            if (p == null) return -1;
+            p.WaitForExit(10000);
+            return p.HasExited ? p.ExitCode : 0;
+        }
+        catch (Exception e) { Log.Write(e); return -1; }
+    }
+
+    // ------------------------------------------------------------------ calculator
+
+    /// <summary>
+    /// A result for arithmetic typed into search ("12*7.5", "(2+3)^2", "15% of 80" isn't supported):
+    /// + − × ÷ ^ and brackets, with "," or "." as the decimal mark. Enter copies the answer.
+    /// </summary>
+    public static AppEntry? Calculate(string query)
+    {
+        string q = query.Trim().TrimEnd('=').Trim();
+        if (q.Length < 3 || !q.Any(char.IsDigit) || q.IndexOfAny(new[] { '+', '-', '*', '/', '^', 'x', '×', '÷', '(' }) < 0) return null;
+        if (System.Text.RegularExpressions.Regex.IsMatch(q, @"^\d{1,4}[-/.]\d{1,2}[-/.]\d{1,4}$")) return null; // a date
+        if (System.Text.RegularExpressions.Regex.IsMatch(q, @"^[\d\s]+$")) return null; // just a number
+        double? v;
+        try { v = new Calc(q).Parse(); }
+        catch { return null; }
+        if (v is not double r || double.IsNaN(r) || double.IsInfinity(r)) return null;
+        string answer = Math.Round(r, 10).ToString("G12", System.Globalization.CultureInfo.CurrentCulture);
+        return new AppEntry
+        {
+            Name = "= " + answer,
+            Id = "calc",
+            Target = answer,
+            Kind = EntryKind.Calc,
+            Detail = "Press Enter to copy " + answer
+        };
+    }
+
+    /// <summary>Recursive-descent arithmetic. Throws on anything it doesn't understand.</summary>
+    sealed class Calc
+    {
+        readonly string _s;
+        int _i;
+        public Calc(string s) { _s = s.Replace('×', '*').Replace('÷', '/').Replace('x', '*').Replace('X', '*').Replace(',', '.'); }
+
+        public double? Parse()
+        {
+            double v = Sum();
+            Skip();
+            if (_i != _s.Length) throw new FormatException();
+            return v;
+        }
+
+        void Skip() { while (_i < _s.Length && char.IsWhiteSpace(_s[_i])) _i++; }
+        bool Eat(char c) { Skip(); if (_i < _s.Length && _s[_i] == c) { _i++; return true; } return false; }
+
+        double Sum()
+        {
+            double v = Product();
+            while (true)
+            {
+                if (Eat('+')) v += Product();
+                else if (Eat('-')) v -= Product();
+                else return v;
+            }
+        }
+
+        double Product()
+        {
+            double v = Power();
+            while (true)
+            {
+                if (Eat('*')) v *= Power();
+                else if (Eat('/')) v /= Power();
+                else if (Eat('%')) v %= Power();
+                else return v;
+            }
+        }
+
+        double Power()
+        {
+            double b = Unary();
+            return Eat('^') ? Math.Pow(b, Power()) : b; // right-associative
+        }
+
+        double Unary()
+        {
+            if (Eat('-')) return -Unary();
+            if (Eat('+')) return Unary();
+            if (Eat('('))
+            {
+                double v = Sum();
+                if (!Eat(')')) throw new FormatException();
+                return v;
+            }
+            Skip();
+            int start = _i;
+            while (_i < _s.Length && (char.IsDigit(_s[_i]) || _s[_i] == '.')) _i++;
+            if (_i == start) throw new FormatException();
+            return double.Parse(_s.AsSpan(start, _i - start), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture);
+        }
+    }
+
     // ------------------------------------------------------------------ opening
 
     public static void Open(AppEntry a)
@@ -66,6 +378,11 @@ internal static class SearchSources
         {
             switch (a.Kind)
             {
+                case EntryKind.Power:
+                    RunPower(a.Target!);
+                    break;
+                case EntryKind.Calc:
+                    break; // copied on the UI thread
                 case EntryKind.ControlPanel:
                     OpenParsingName(a.Target!);
                     break;
@@ -393,6 +710,7 @@ internal static class SearchSources
         if (path == "~" || path.StartsWith("~\\") || path.StartsWith("~/"))
             path = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile) + path.Substring(1);
 
+        if (path.Length == 2 && char.IsLetter(path[0]) && path[1] == ':') path += "\\"; // "d:" → D:\
         bool unc = path.StartsWith(@"\\");
         bool rooted = unc || (path.Length >= 3 && char.IsLetter(path[0]) && path[1] == ':' && (path[2] == '\\' || path[2] == '/'));
         if (rooted)
@@ -534,27 +852,37 @@ internal static class SearchSources
 
     static List<FileHit> SearchFiles(string query, int max)
     {
-        var tokens = Search.Tokenize(query);
-        if (tokens.Length == 0) return new();
+        var (scope, rest) = ParseScope(query);
+        if (scope != Scope.All && !IsFileScope(scope)) return new();
+        var kind = KindOf(scope);
+        var tokens = Search.Tokenize(rest);
+        if (tokens.Length == 0 && kind == null) return new();
         var sw = Stopwatch.StartNew();
         var found = new Dictionary<string, FileHit>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var (path, name, folder, modified) in QueryIndex(tokens, query.Trim(), max * 4))
-            Consider(found, tokens, path, name, folder, modified, recent: false);
+        foreach (var h in QueryIndex(tokens, rest.Trim(), max * 4, kind?.Kind))
+            Consider(found, tokens, h.Path, h.Name, h.Folder, h.Modified, recent: false, content: h.Content);
         long indexMs = sw.ElapsedMilliseconds;
 
-        foreach (var (path, name, folder, used) in RecentMatches(tokens, max * 2))
-            Consider(found, tokens, path, name, folder, used, recent: true);
+        foreach (var (path, name, folder, used) in RecentMatches(tokens, max * 2, kind))
+            Consider(found, tokens, path, name, folder, used, recent: true, content: false);
 
         var list = found.Values.OrderByDescending(h => h.Score).Take(max * 2).ToList();
         Log.Write($"file search '{query}': {list.Count} hits, index {indexMs} ms, total {sw.ElapsedMilliseconds} ms");
         return list;
     }
 
-    static void Consider(Dictionary<string, FileHit> found, string[] tokens, string path, string name, bool folder, DateTime? when, bool recent)
+    static void Consider(Dictionary<string, FileHit> found, string[] tokens, string path, string name, bool folder,
+                         DateTime? when, bool recent, bool content)
     {
-        double m = Search.Score(tokens, name);
-        if (m <= 0) m = recent ? 0 : 30; // the index matched a word inside the name the simple matcher didn't see
+        double m;
+        if (tokens.Length == 0) m = 45;       // "photos:" alone: newest first
+        else if (content) m = 24;             // the words are inside the file, not in its name
+        else
+        {
+            m = Search.Score(tokens, name);
+            if (m <= 0) m = recent ? 0 : 30;  // the index matched a word inside the name the simple matcher didn't see
+        }
         if (m <= 0) return;
         if (when is DateTime t)
         {
@@ -569,7 +897,7 @@ internal static class SearchSources
             Id = "file:" + path.ToLowerInvariant(),
             Target = path,
             Kind = folder ? EntryKind.Folder : EntryKind.File,
-            Detail = path
+            Detail = content ? path + "\n(the text you typed is inside this file)" : path
         }, m);
     }
 
@@ -580,47 +908,62 @@ internal static class SearchSources
 
     static bool _containsWorks = true;
 
+    readonly record struct IndexHit(string Path, string Name, bool Folder, DateTime? Modified, bool Content);
+
     /// <summary>
-    /// Names that start with the text or have a word starting with it first (newest first), then,
-    /// if that found few, names that contain it anywhere.
+    /// Names that start with the text or have a word starting with it first (newest first); if that
+    /// found few, names that contain it anywhere, then files that contain the words, like Start.
+    /// <paramref name="kind"/> limits it to a Windows Search kind ("picture", "document", "folder"…).
     /// </summary>
-    static IEnumerable<(string Path, string Name, bool Folder, DateTime? Modified)> QueryIndex(string[] tokens, string raw, int max)
+    static List<IndexHit> QueryIndex(string[] tokens, string raw, int max, string? kind)
     {
-        var results = new List<(string, string, bool, DateTime?)>();
+        var results = new List<IndexHit>();
         if (DateTime.UtcNow < _indexBrokenUntil) return results;
 
         string like = Clean(raw, forLike: true);
         var words = tokens.Select(t => Clean(t, forLike: false)).Where(t => t.Length > 0).ToArray();
-        if (like.Length == 0) return results;
+        if (like.Length == 0 && (tokens.Length > 0 || kind == null)) return results;
 
-        const string filter = " AND System.ItemType <> '.lnk' AND System.ItemType <> '.url' AND System.FileName <> 'desktop.ini'" +
-                              " ORDER BY System.DateModified DESC";
-        string Select(int top, string where) =>
+        string filter = " AND System.ItemType <> '.lnk' AND System.ItemType <> '.url' AND System.FileName <> 'desktop.ini'" +
+                        (kind != null ? " AND System.Kind = '" + kind + "'" : "") +
+                        " ORDER BY System.DateModified DESC";
+        string Select(int top, string? where) =>
             "SELECT TOP " + top + " System.ItemPathDisplay, System.ItemNameDisplay, System.ItemType, System.DateModified " +
-            "FROM SystemIndex WHERE SCOPE='file:' AND (" + where + ")" + filter;
+            "FROM SystemIndex WHERE SCOPE='file:'" + (where != null ? " AND (" + where + ")" : "") + filter;
 
-        string prefix = "System.FileName LIKE '" + like + "%'";
-        string wordStart = words.Length > 0
-            ? "CONTAINS(System.FileName, '" + string.Join(" AND ", words.Select(w => "\"" + w + "*\"")) + "')"
-            : "";
+        string phrase = string.Join(" AND ", words.Select(w => "\"" + w + "*\""));
         try
         {
-            if (_containsWorks && wordStart.Length > 0)
+            if (like.Length == 0)
             {
-                try { Read(Select(max, prefix + " OR " + wordStart), results); }
+                Read(Select(max, null), results, false); // just a filter: the newest of that kind
+                return results;
+            }
+
+            string prefix = "System.FileName LIKE '" + like + "%'";
+            if (_containsWorks && words.Length > 0)
+            {
+                try { Read(Select(max, prefix + " OR CONTAINS(System.FileName, '" + phrase + "')"), results, false); }
                 catch (Exception e)
                 {
                     // Some words (like "the") can't be used with CONTAINS; if it never works, stop trying it.
                     Log.Write("file index (word search): " + e.Message);
                     if (results.Count == 0 && ++_containsFailures >= 3) _containsWorks = false;
                     results.Clear();
-                    Read(Select(max, prefix), results);
+                    Read(Select(max, prefix), results, false);
                 }
             }
-            else Read(Select(max, prefix), results);
+            else Read(Select(max, prefix), results, false);
 
             if (results.Count < max / 2 && like.Length >= 3)
-                Read(Select(max, "System.FileName LIKE '%" + like + "%'"), results);
+                Read(Select(max, "System.FileName LIKE '%" + like + "%'"), results, false);
+
+            // Inside files (documents, text, code): what Start also finds, ranked below name matches.
+            if (results.Count < max / 2 && _containsWorks && words.Length > 0 && words.Sum(w => w.Length) >= 3 && kind != "folder")
+            {
+                try { Read(Select(max / 2, "CONTAINS(*, '" + phrase + "')"), results, true); }
+                catch (Exception e) { Log.Write("file index (contents): " + e.Message); }
+            }
         }
         catch (Exception e)
         {
@@ -634,7 +977,7 @@ internal static class SearchSources
 
     static int _containsFailures;
 
-    static void Read(string sql, List<(string, string, bool, DateTime?)> results)
+    static void Read(string sql, List<IndexHit> results, bool content)
     {
         if (_conn == null)
         {
@@ -656,7 +999,7 @@ internal static class SearchSources
                 string name = rows[c0 + 1, i] as string ?? Path.GetFileName(path);
                 bool folder = rows[c0 + 2, i] is string t && t.Equals("Directory", StringComparison.OrdinalIgnoreCase);
                 DateTime? date = rows[c0 + 3, i] is DateTime d ? d.ToLocalTime() : null;
-                results.Add((path, name, folder, date));
+                results.Add(new IndexHit(path, name, folder, date, content));
             }
         }
         finally
@@ -683,7 +1026,7 @@ internal static class SearchSources
     static DateTime _recentAt = DateTime.MinValue;
     static object? _wsh;
 
-    static IEnumerable<(string Path, string Name, bool Folder, DateTime? Used)> RecentMatches(string[] tokens, int max)
+    static IEnumerable<(string Path, string Name, bool Folder, DateTime? Used)> RecentMatches(string[] tokens, int max, (string Kind, string[] Exts)? kind)
     {
         var results = new List<(string, string, bool, DateTime?)>();
         try
@@ -700,7 +1043,14 @@ internal static class SearchSources
                     : new();
                 _recentAt = DateTime.UtcNow;
             }
-            var matches = _recent.Where(r => Search.Score(tokens, r.Stem) >= 40).Take(max);
+            // The shortcut's name is the file's name ("report.docx"), so the extension can filter before resolving.
+            bool KindOk(string stem)
+            {
+                if (kind is not { } k) return true;
+                if (k.Kind == "folder") return !Path.HasExtension(stem);
+                return k.Exts.Contains(Path.GetExtension(stem).ToLowerInvariant());
+            }
+            var matches = _recent.Where(r => KindOk(r.Stem) && (tokens.Length == 0 || Search.Score(tokens, r.Stem) >= 40)).Take(max);
             foreach (var (stem, lnk, used) in matches)
             {
                 string? target = LinkTarget(lnk);
@@ -710,6 +1060,7 @@ internal static class SearchSources
                 else if (Directory.Exists(target)) folder = true;
                 else if (File.Exists(target)) folder = false;
                 else continue; // moved or deleted
+                if (kind is { Kind: "folder" } && !folder) continue;
                 results.Add((target, folder ? NameOfPath(target) : Path.GetFileName(target), folder, used));
             }
         }
