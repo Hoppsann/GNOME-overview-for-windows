@@ -113,7 +113,10 @@ internal static class ShellActions
 
     public static void Launch(string target)
     {
-        try { Process.Start(new ProcessStartInfo(target) { UseShellExecute = true }); }
+        try
+        {
+            if (!Unelevated.TryStart(target)) Process.Start(new ProcessStartInfo(target) { UseShellExecute = true });
+        }
         catch (Exception e) { Log.Write(e); }
     }
 
@@ -127,7 +130,12 @@ internal static class ShellActions
 
     public static void OpenFileLocation(string file)
     {
-        try { Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{file}\"") { UseShellExecute = true }); }
+        try
+        {
+            string select = $"/select,\"{file}\"";
+            if (!Unelevated.TryStart("explorer.exe", select))
+                Process.Start(new ProcessStartInfo("explorer.exe", select) { UseShellExecute = true });
+        }
         catch (Exception e) { Log.Write(e); }
     }
 

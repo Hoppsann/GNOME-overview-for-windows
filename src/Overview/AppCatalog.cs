@@ -242,6 +242,7 @@ internal static class AppCatalog
     {
         try
         {
+            if (Unelevated.TryStart(ParsingName(a))) return;
             Process.Start(new ProcessStartInfo(ParsingName(a)) { UseShellExecute = true });
         }
         catch (Exception e)
