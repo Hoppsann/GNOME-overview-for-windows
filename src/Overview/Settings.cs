@@ -14,6 +14,8 @@ internal sealed class Settings
     /// <summary>"default" (the browser's own engine), "google", "bing", "duckduckgo" or "brave".</summary>
     public string SearchEngine { get; set; } = "default";
     public bool LearnFromUsage { get; set; } = true;
+    /// <summary>Search also shows files and folders (Windows Search index + recent files).</summary>
+    public bool SearchFiles { get; set; } = true;
     /// <summary>App results shown under the search bar (the web search tile comes on top of these).</summary>
     public int MaxAppResults { get; set; } = 7;
     /// <summary>Animation duration multiplier: 1 normal, 0.5 fast, 1.6 slow, 0 off.</summary>

@@ -55,6 +55,7 @@ internal sealed class OverviewWindow : Window
         public Rect Bounds; // DIP, for the search-results row
         public bool InGrid; // lives in the scrollable app grid instead
         public bool IsWeb;  // the "Search the web" result
+        public bool IsFile; // in the files row under the results
     }
 
     /// <summary>A web search suggestion, shown as a chip under the app results.</summary>
@@ -120,6 +121,9 @@ internal sealed class OverviewWindow : Window
 
     readonly List<Tile> _tiles = new();
     readonly List<AppTile> _apps = new();
+    readonly List<AppTile> _files = new();  // files and folders, a second row under the results
+    object? _defaultSel;                     // what search selected by itself (files may replace it)
+    readonly DispatcherTimer _fileTimer = new() { Interval = TimeSpan.FromMilliseconds(110) };
 
     // App grid ("Show apps" button at the right end of the search bar)
     readonly Border _gridButton;
@@ -327,6 +331,7 @@ internal sealed class OverviewWindow : Window
         Content = _root;
 
         _suggestTimer.Tick += (_, _) => { _suggestTimer.Stop(); FetchSuggestions(); };
+        _fileTimer.Tick += (_, _) => { _fileTimer.Stop(); FetchFiles(); };
 
         PreviewKeyDown += OnPreviewKeyDown;
         PreviewMouseMove += OnPreviewMouseMove;
@@ -479,6 +484,7 @@ internal sealed class OverviewWindow : Window
             ApplyChrome();
             ClearTiles();
             ClearApps();
+            ClearFiles();
             _empty.Visibility = Visibility.Collapsed;
 
             Show();
@@ -674,6 +680,7 @@ internal sealed class OverviewWindow : Window
         ClearChips();
         ClearTiles();
         ClearApps();
+        ClearFiles();
         _sel = null;
         _state = State.Hidden;
         AppCatalog.RefreshIfStale();
@@ -1057,8 +1064,16 @@ internal sealed class OverviewWindow : Window
     void ClearApps()
     {
         foreach (var a in _apps) _stage.Children.Remove(a.Root);
+        if (_sel is AppTile sa && _apps.Contains(sa)) _sel = null;
         _apps.Clear();
-        if (_sel is AppTile) _sel = null;
+    }
+
+    void ClearFiles()
+    {
+        _fileTimer.Stop();
+        foreach (var f in _files) _stage.Children.Remove(f.Root);
+        if (_sel is AppTile sf && _files.Contains(sf)) _sel = null;
+        _files.Clear();
     }
 
     // ------------------------------------------------------------------ app grid
@@ -1092,6 +1107,7 @@ internal sealed class OverviewWindow : Window
             _search.Text = "";
             _suppressText = false;
             ClearApps();
+            ClearFiles();
             foreach (var t in _tiles) t.Visible = true;
         }
         ClearChips();
@@ -1242,7 +1258,7 @@ internal sealed class OverviewWindow : Window
     void PositionChips()
     {
         double screenW = _mon.Width / _dpi, screenH = _mon.Height / _dpi;
-        double top = AppsTop + AppTileH + 12;
+        double top = ResultsBottom + 12;
         double y = top;
         int fit = 0;
         foreach (var c in _chips)
@@ -1265,6 +1281,11 @@ internal sealed class OverviewWindow : Window
     }
 
     double _chipsHeight;
+
+    const double FilesTop = AppsTop + AppTileH + 4;
+
+    /// <summary>Where the result rows end (DIP): under the files row when there is one.</summary>
+    double ResultsBottom => _files.Count > 0 ? FilesTop + AppTileH : AppsTop + AppTileH;
 
     /// <summary>Height kept free for the suggestion list while searching: room for the usual
     /// one-line suggestions, or more if they wrapped. Keeps windows still as suggestions update.</summary>
@@ -1335,6 +1356,7 @@ internal sealed class OverviewWindow : Window
         LockHover();
         Select(a);
         var app = a.App;
+        if (app.Kind != EntryKind.App) { ShowResultMenu(a, atMouse); return; }
         string? file = ShellActions.ResolveFile(app);
         bool store = ShellActions.IsStoreApp(app);
 
@@ -1349,6 +1371,35 @@ internal sealed class OverviewWindow : Window
         if (file != null)
             menu.Items.Add(MenuEntry("Properties", "", () => RunAndClose(() => ShellActions.ShowProperties(file))));
         menu.Items.Add(MenuEntry("Uninstall…", "", () => RunAndClose(ShellActions.OpenInstalledApps)));
+        OpenMenu(menu, a.Root, atMouse);
+    }
+
+    /// <summary>Right-click menu for files, folders, commands, settings pages and Control Panel items.</summary>
+    void ShowResultMenu(AppTile a, bool atMouse)
+    {
+        var e = a.App;
+        string? path = e.Kind is EntryKind.File or EntryKind.Folder or EntryKind.Command ? e.Target : null;
+        bool exists = path != null && !path.StartsWith(@"\\") && (File.Exists(path) || Directory.Exists(path));
+        string ext = path != null ? Path.GetExtension(path).ToLowerInvariant() : "";
+
+        var menu = new ContextMenu();
+        menu.Items.Add(MenuEntry("Open", "\uE8A7", () => LaunchApp(a)));
+        if (exists && ext is ".exe" or ".msc" or ".cpl" or ".bat" or ".cmd" or ".ps1")
+            menu.Items.Add(MenuEntry("Run as administrator", "\uE7EF", () => RunAndClose(() => ShellActions.RunAsAdmin(path!))));
+        if (exists && path!.IndexOf(@"\WindowsApps\", StringComparison.OrdinalIgnoreCase) < 0)
+            menu.Items.Add(MenuEntry(e.Kind == EntryKind.Folder ? "Show in parent folder" : "Open file location", "\uE838",
+                () => RunAndClose(() => ShellActions.OpenFileLocation(path!))));
+        if (path != null)
+            menu.Items.Add(MenuEntry("Copy path", "\uE8C8", () =>
+            {
+                try { Clipboard.SetText(path); } catch (Exception ex) { Log.Write(ex); }
+                Dismiss(null);
+            }));
+        if (exists)
+        {
+            menu.Items.Add(new Separator());
+            menu.Items.Add(MenuEntry("Properties", "\uE946", () => RunAndClose(() => ShellActions.ShowProperties(path!))));
+        }
         OpenMenu(menu, a.Root, atMouse);
     }
 
@@ -1387,7 +1438,14 @@ internal sealed class OverviewWindow : Window
         string? iconName = a.IsWeb ? WebSearch.BrowserExe() : AppCatalog.ParsingName(a.App);
         var glyph = new TextBlock
         {
-            Text = a.IsWeb ? "\uE774" : "\uE71D", // globe / generic app
+            Text = a.IsWeb ? "\uE774" : a.App.Kind switch // globe / kind of result
+            {
+                EntryKind.Setting or EntryKind.ControlPanel => "\uE713",  // gear
+                EntryKind.Folder => "\uE8B7",                             // folder
+                EntryKind.File => "\uE8A5",                               // document
+                EntryKind.Command => "\uE756",                            // command prompt
+                _ => "\uE71D"                                             // generic app
+            },
             FontFamily = IconFont,
             FontSize = 36,
             Foreground = TextBrush,
@@ -1436,7 +1494,7 @@ internal sealed class OverviewWindow : Window
             CornerRadius = new CornerRadius(14),
             Background = Brushes.Transparent,
             Child = sp,
-            ToolTip = a.IsWeb ? "Search in your default browser" : a.App.Name
+            ToolTip = a.IsWeb ? "Search in your default browser" : a.App.Detail ?? a.App.Name
         };
         a.Root.MouseEnter += (_, _) => { if (!_hoverLocked) Select(a); };
         a.Root.MouseLeftButtonUp += (_, e) => { e.Handled = true; if (!OpenKeyboardSelection()) LaunchApp(a); };
@@ -1462,7 +1520,18 @@ internal sealed class OverviewWindow : Window
             x += AppTileW + AppGap;
         }
 
-        double topDip = _apps.Count > 0 ? AppsTop + AppTileH + 24 : AppsTop + 6;
+        // Files and folders, a second row under it.
+        double filesW = _files.Count * AppTileW + Math.Max(0, _files.Count - 1) * AppGap;
+        double fx = (W / d - filesW) / 2;
+        foreach (var f in _files)
+        {
+            f.Bounds = new Rect(fx, FilesTop, AppTileW, AppTileH);
+            Canvas.SetLeft(f.Root, fx);
+            Canvas.SetTop(f.Root, FilesTop);
+            fx += AppTileW + AppGap;
+        }
+
+        double topDip = _apps.Count > 0 ? ResultsBottom + 24 : AppsTop + 6;
         // Keep the suggestion row reserved while searching, so windows don't jump when suggestions arrive.
         topDip += ChipReserve();
         var inset = _taskbarInset;
@@ -1487,7 +1556,7 @@ internal sealed class OverviewWindow : Window
 
         if (_gridMode) return; // the grid manages its own "loading" message
         _empty.Text = "No results";
-        _empty.Visibility = Searching && visible.Count == 0 && _apps.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        _empty.Visibility = Searching && visible.Count == 0 && _apps.Count == 0 && _files.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 
     void MeasureLabel(Tile t)
@@ -1639,8 +1708,21 @@ internal sealed class OverviewWindow : Window
         double bestAppMatch = 0;
         if (tokens.Length > 0)
         {
-            var matches = AppCatalog.Apps
-                .Select(a => (a, m: Search.Score(tokens, a.Name)))
+            // Apps, then what else Start's search finds: Windows Tools, Settings pages, Control Panel,
+            // and Run-dialog commands and paths ("regedit", "%appdata%").
+            var candidates = AppCatalog.Apps.Concat(AppCatalog.Extras).Concat(SearchSources.SettingsPages);
+            var command = SearchSources.MatchCommand(query);
+            if (command != null)
+            {
+                // Typing an app's exe name finds the app itself already ("regedit" → Registry Editor).
+                string stem = command.ExeStem ?? "";
+                bool known = stem.Length > 0 && AppCatalog.Apps.Concat(AppCatalog.Extras).Any(a => a.ExeStem == stem);
+                if (!known) candidates = candidates.Append(command);
+            }
+            var matches = candidates
+                // A typed path is surely meant; a program name ("winver") ranks just under a strong app match.
+                .Select(a => (a, m: a == command ? (command.Kind == EntryKind.Command && command.ExeStem != null ? 88 : 97)
+                                                 : SearchSources.Match(tokens, a)))
                 .Where(x => x.m > 0)
                 .Select(x => (x.a, x.m, s: x.m + Usage.Bonus(x.a.Id, query)))
                 .OrderByDescending(x => x.s)
@@ -1660,20 +1742,97 @@ internal sealed class OverviewWindow : Window
             _apps.Add(web);
         }
 
+        FilterFiles(tokens);
+        if (_chips.Count > 0) PositionChips(); // the files row may have come or gone
         Relayout();
         StartAnim(FilterMs, 1, null);
         QueueSuggestions();
+        QueueFiles();
 
         // Default selection (what Enter does): the best window or app match, unless nothing
         // matches well, e.g. "how many days until christmas", then the web search.
         if (tokens.Length == 0) { SelectDefault(); return; } // search cleared: back to the previous window
         var bestApp = _apps.FirstOrDefault(a => !a.IsWeb); // already sorted best-first
         double appScore = bestApp?.Score ?? 0, winScore = bestTile?.Score ?? 0;
+        bool keepFile = _sel is AppTile { IsFile: true } && !ReferenceEquals(_sel, _defaultSel); // picked by you
         // "Nothing matches well" is judged on the text match alone, not on usage.
-        if (Math.Max(bestAppMatch, bestTileMatch) < WebThreshold) Select(_apps.First(a => a.IsWeb));
+        if (keepFile) { }
+        else if (Math.Max(bestAppMatch, bestTileMatch) < WebThreshold)
+        {
+            var file = _files.FirstOrDefault();
+            if (file != null && file.Score >= WebThreshold) Select(file);
+            else Select(_apps.First(a => a.IsWeb));
+        }
         else if (bestTile != null && winScore >= appScore) Select(bestTile);
         else if (bestApp != null && OpenWindowOf(bestApp) is Tile open) Select(open); // already open: switch, don't start another
         else Select(bestApp);
+        if (!keepFile) _defaultSel = _sel;
+    }
+
+    // ------------------------------------------------------------------ file results
+
+    const int MaxFileResults = 8;
+    bool FilesOn => App.Settings.SearchFiles && !_gridMode;
+
+    /// <summary>Drops file results that no longer match what's typed, at once (new ones follow shortly).</summary>
+    void FilterFiles(string[] tokens)
+    {
+        if (!FilesOn || tokens.Length == 0 || _search.Text.Trim().Length < 2) { ClearFiles(); return; }
+        foreach (var f in _files.ToList())
+        {
+            if (Search.Score(tokens, f.App.Name) > 0) continue;
+            _stage.Children.Remove(f.Root);
+            if (ReferenceEquals(_sel, f)) _sel = null;
+            _files.Remove(f);
+        }
+    }
+
+    void QueueFiles()
+    {
+        _fileTimer.Stop();
+        if (!FilesOn || _search.Text.Trim().Length < 2) return;
+        _fileTimer.Start();
+    }
+
+    void FetchFiles()
+    {
+        if (_state != State.Open || !FilesOn) return;
+        string query = _search.Text;
+        if (query.Trim().Length < 2) return;
+        int max = Math.Min(MaxFileResults, AppTilesThatFit());
+        SearchSources.FindFiles(query, max, ShowFiles);
+    }
+
+    void ShowFiles(string query, List<SearchSources.FileHit> hits)
+    {
+        // Ignore answers to text that's no longer in the box, or that arrive after closing.
+        if (_state != State.Open || !FilesOn || _search.Text != query) return;
+        int max = Math.Min(MaxFileResults, AppTilesThatFit());
+        int selIndex = _sel is AppTile st && _files.Contains(st) ? _files.IndexOf(st) : -1;
+        bool wasDefault = ReferenceEquals(_sel, _defaultSel);
+        ClearFiles();
+        var ranked = hits
+            .Select(h => (h.Entry, s: h.Score + Usage.Bonus(h.Entry.Id, query)))
+            .OrderByDescending(x => x.s)
+            .Take(max);
+        foreach (var (entry, score) in ranked)
+        {
+            var tile = new AppTile(entry, score) { IsFile = true };
+            CreateAppVisuals(tile, _stage);
+            _files.Add(tile);
+        }
+        PositionChips();
+        Relayout();
+        StartAnim(FilterMs, 1, null);
+
+        if (selIndex >= 0 && _files.Count > 0) Select(_files[Math.Min(selIndex, _files.Count - 1)]);
+        else if (wasDefault || _sel == null)
+        {
+            // Nothing else matched well, but a file does: make it what Enter opens.
+            bool webDefault = _sel is AppTile { IsWeb: true } || _sel == null;
+            var best = _files.FirstOrDefault();
+            if (webDefault && best != null && best.Score >= WebThreshold) { Select(best); _defaultSel = best; }
+        }
     }
 
     /// <summary>How many result tiles fit side by side on this screen.</summary>
@@ -1696,6 +1855,7 @@ internal sealed class OverviewWindow : Window
     {
         if (_gridMode) return new List<object>(_gridApps);
         var list = new List<object>(_apps);
+        list.AddRange(_files);
         list.AddRange(_chips);
         // _tiles is in the same order the layout fills its rows, so this is reading order:
         // left to right along each row, then the next row down.
@@ -1913,6 +2073,7 @@ internal sealed class OverviewWindow : Window
             return;
         }
         foreach (var a in _apps) if (a.Root.IsMouseOver) { Select(a); return; }
+        foreach (var f in _files) if (f.Root.IsMouseOver) { Select(f); return; }
         foreach (var c in _chips) if (c.Root.IsMouseOver) { Select(c); return; }
         foreach (var t in _tiles) if (t.Visible && (t.Ring.IsMouseOver || t.Label.IsMouseOver)) { Select(t); return; }
     }

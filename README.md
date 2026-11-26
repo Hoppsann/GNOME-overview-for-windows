@@ -23,8 +23,12 @@ then tap the Windows key again to jump straight there.
 - **Live windows.** Thumbnails are live, not screenshots. Videos keep playing and chats keep scrolling.
 - **Alt+Tab, but better.** The window you used before the current one is highlighted when the overview
   opens, so a **double-tap** of the Windows key flips between your last two windows.
-- **Search everything.** Typing filters your open windows and shows matching installed apps
-  (desktop and Microsoft Store). Fuzzy matching works: `vsc` finds Visual Studio Code.
+- **Search everything Start finds.** Typing filters your open windows and shows matching installed apps
+  (desktop and Microsoft Store), Windows Tools (Services, Event Viewer…), Settings pages
+  (`wallpaper`, `bluetooth`), Control Panel items and tasks (`environment variables`), and files and
+  folders from the Windows Search index and your recent files, in a row of their own. Apps are found by
+  their exe name too (`cmd`, `regedit`), and Run-dialog commands and paths work (`winver`,
+  `services.msc`, `%appdata%`, `C:\Users`). Fuzzy matching works: `vsc` finds Visual Studio Code.
 - **Learns what you use.** Results you picked before for the same letters come first (the latest pick
   wins), and apps you use a lot rank higher. If you open Command Prompt after typing `c`, then `c`
   alone brings it up next time.
@@ -106,7 +110,7 @@ or with `Overview.exe --settings`. Changes apply right away.
 | Section | Options |
 | --- | --- |
 | General | Windows key opens Overview; a second tap switches to the highlighted window or just closes; top-left hot corner; start with Windows; automatic updates |
-| Search | Web search suggestions; web search engine (your browser's default, Google, Bing, DuckDuckGo or Brave Search); rank results by what you use, with a button to clear that history; how many app results to show |
+| Search | Web search suggestions; web search engine (your browser's default, Google, Bing, DuckDuckGo or Brave Search); search files and folders; rank results by what you use, with a button to clear that history; how many app results to show |
 | Appearance | Animation speed (normal, fast, slow or off); how much the background is darkened |
 
 ## Privacy
@@ -116,6 +120,8 @@ Overview runs entirely on your PC. It only goes online for two things, and you c
 - **Web search suggestions.** While suggestions are on, what you type is sent to your browser's search
   engine (Google, Bing or Brave), the same as typing in the browser's address bar. Turn this off in the tray menu.
 - **Update checks**, if you chose them during setup. These only contact GitHub.
+
+File search reads the Windows Search index on your PC, the same one Start uses; nothing leaves your PC.
 
 Settings, a small log and what search has learned (`usage.json`) are stored in `%APPDATA%\Overview`.
 Delete `usage.json` to make search forget.
@@ -162,6 +168,7 @@ updates turned on pick it up from there.
 | `Layout.cs` | GNOME-like row packing that keeps windows' relative sizes |
 | `AppCatalog.cs` | All installed apps from `shell:AppsFolder` (desktop and Store) |
 | `Search.cs` | Fuzzy matching: prefix, word start, acronym, substring |
+| `SearchSources.cs` | Settings pages, Control Panel, Run commands and paths, files (Windows Search index + recent files) |
 | `Usage.cs` | Learns from what you pick and use, to rank search results |
 | `WebSearch.cs` / `WebSuggest.cs` | Default-browser web search and search suggestions |
 | `ShellActions.cs` | Right-click actions: run as admin, file location, properties |

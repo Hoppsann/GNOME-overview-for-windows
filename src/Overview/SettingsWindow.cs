@@ -88,6 +88,10 @@ internal sealed class SettingsWindow : Window
         search.Children.Add(Check("Show web search suggestions while typing", S.WebSuggestions, v => { S.WebSuggestions = v; Changed(); },
             "Sends what you type in Overview to the search engine, like a browser's address bar does."));
 
+        search.Children.Add(Check("Search files and folders", S.SearchFiles, v => { S.SearchFiles = v; Changed(); },
+            "Finds files by name in the Windows Search index (the same one Start uses) and in your recent files. " +
+            "To search more places, add them under Settings › Privacy & security › Searching Windows."));
+
         search.Children.Add(Label("Web search engine"));
         search.Children.Add(Choice("engine", new[]
         {
