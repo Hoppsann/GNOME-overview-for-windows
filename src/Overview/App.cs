@@ -112,6 +112,7 @@ public sealed class App : Application
         Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, () =>
         {
             AppCatalog.StartRefresh(); // background thread, below-normal priority; also preloads icons
+            AppCatalog.StartWatching(); // new installs show up in search right away
             _overview?.WarmUp();
             ThreadPool.QueueUserWorkItem(_ =>
             {

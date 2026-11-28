@@ -76,12 +76,63 @@ internal static class AppCatalog
         if (DateTime.UtcNow - _lastRefresh > TimeSpan.FromMinutes(2)) StartRefresh();
     }
 
+    /// <summary>Raised (on a background thread) when the list of apps has changed.</summary>
+    public static event Action? Changed;
+
+    /// <summary>
+    /// For a search that found no app: maybe it was installed a moment ago. Reads the list again,
+    /// at most every few seconds; <see cref="Changed"/> follows if something new turned up.
+    /// </summary>
+    public static void RefreshSoon()
+    {
+        if (DateTime.UtcNow - _lastRefresh > TimeSpan.FromSeconds(8)) StartRefresh();
+    }
+
+    static int _pending;
+    static readonly List<FileSystemWatcher> Watchers = new();
+    static Timer? _debounce;
+
+    /// <summary>
+    /// Notices new and removed apps as it happens, so a program you just installed is found the first
+    /// time you search for it: watches the Start Menu folders (desktop programs put their shortcuts
+    /// there) and your Packages folder (Microsoft Store and other packaged apps get a folder there).
+    /// </summary>
+    public static void StartWatching()
+    {
+        if (Watchers.Count > 0) return;
+        _debounce = new Timer(_ => StartRefresh(), null, Timeout.Infinite, Timeout.Infinite);
+        void Watch(string? dir, bool subdirs, NotifyFilters filters)
+        {
+            if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir)) return;
+            try
+            {
+                var w = new FileSystemWatcher(dir) { IncludeSubdirectories = subdirs, NotifyFilter = filters, InternalBufferSize = 32768 };
+                FileSystemEventHandler h = (_, _) => Soon();
+                w.Created += h; w.Deleted += h; w.Changed += h;
+                w.Renamed += (_, _) => Soon();
+                w.Error += (_, e) => Log.Write("app watcher: " + e.GetException().Message);
+                w.EnableRaisingEvents = true;
+                Watchers.Add(w);
+            }
+            catch (Exception e) { Log.Write($"watch {dir}: {e.Message}"); }
+        }
+        var lnk = NotifyFilters.FileName | NotifyFilters.DirectoryName;
+        Watch(Environment.GetFolderPath(Environment.SpecialFolder.StartMenu), true, lnk);
+        Watch(Environment.GetFolderPath(Environment.SpecialFolder.CommonStartMenu), true, lnk);
+        Watch(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Packages"), false, NotifyFilters.DirectoryName);
+        Log.Write($"watching {Watchers.Count} folders for new apps");
+    }
+
+    /// <summary>Installers write several files in a row: refresh once things have been quiet for a moment.</summary>
+    static void Soon() => _debounce?.Change(1500, Timeout.Infinite);
+
     static long _busySinceTicks;
 
     public static void StartRefresh()
     {
         if (Interlocked.Exchange(ref _busy, 1) == 1)
         {
+            Interlocked.Exchange(ref _pending, 1); // something changed meanwhile: read it again after this one
             // A refresh is running. If it has hung in the shell for over a minute, give up on it
             // (it can finish or not on its own) and start a fresh one, so icons keep preloading.
             if (DateTime.UtcNow.Ticks - Interlocked.Read(ref _busySinceTicks) < TimeSpan.TicksPerMinute) return;
@@ -105,7 +156,11 @@ internal static class AppCatalog
                 Log.Write(e);
                 try { Publish(LoadStartMenu(), new()); } catch (Exception e2) { Log.Write(e2); }
             }
-            finally { Interlocked.Exchange(ref _busy, 0); }
+            finally
+            {
+                Interlocked.Exchange(ref _busy, 0);
+                if (Interlocked.Exchange(ref _pending, 0) == 1) StartRefresh();
+            }
         })
         // Below normal: reading hundreds of apps and icons must never compete with what you're doing,
         // least of all right after signing in, when everything else is starting too.
@@ -144,6 +199,7 @@ internal static class AppCatalog
         for (int i = 0; i < list.Count && same; i++)
             same = old.Apps[i].Id == list[i].Id && old.Apps[i].Name == list[i].Name;
         if (same) list = old.Apps;
+        bool extrasChanged = old.Extras.Count != extras.Count;
         var snap = new Snapshot { Apps = list, Extras = extras, ExeToId = same ? old.ExeToId : new(StringComparer.OrdinalIgnoreCase) };
         foreach (var a in list) snap.NameById.TryAdd(a.Id, a.Name);
         foreach (var a in extras) snap.NameById.TryAdd(a.Id, a.Name);
@@ -156,6 +212,11 @@ internal static class AppCatalog
             snap.ExeToId = map;
         }
         catch (Exception e) { Log.Write(e); }
+        if (!same || extrasChanged)
+        {
+            if (old.Apps.Count > 0) Log.Write($"app list changed: {old.Apps.Count} → {list.Count} apps");
+            try { Changed?.Invoke(); } catch (Exception e) { Log.Write(e); }
+        }
     }
 
     /// <summary>

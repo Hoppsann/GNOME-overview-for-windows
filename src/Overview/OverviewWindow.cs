@@ -332,6 +332,11 @@ internal sealed class OverviewWindow : Window
 
         _suggestTimer.Tick += (_, _) => { _suggestTimer.Stop(); FetchSuggestions(); };
         _fileTimer.Tick += (_, _) => { _fileTimer.Stop(); FetchFiles(); };
+        // A newly installed app: show it in the results you're looking at, without typing again.
+        AppCatalog.Changed += () => Dispatcher.BeginInvoke(() =>
+        {
+            if (_state == State.Open && !_gridMode && Searching) OnQueryChanged();
+        });
 
         PreviewKeyDown += OnPreviewKeyDown;
         PreviewMouseMove += OnPreviewMouseMove;
@@ -1774,6 +1779,10 @@ internal sealed class OverviewWindow : Window
 
         // Default selection (what Enter does): the best window or app match, unless nothing
         // matches well, e.g. "how many days until christmas", then the web search.
+        // No app matched well: it may have been installed just now, so read the list again (the results
+        // update by themselves if it turns up).
+        if (tokens.Length > 0 && scope is SearchSources.Scope.All or SearchSources.Scope.Apps && bestAppMatch < 80)
+            AppCatalog.RefreshSoon();
         if (tokens.Length == 0 && all) { SelectDefault(); return; } // search cleared: back to the previous window
         if (calc != null) { Select(_apps[0]); _defaultSel = _sel; return; }
         if (scope == SearchSources.Scope.Web && WebSearch.AsUrl(text) == null && _apps.Count > 0) { Select(_apps[^1]); _defaultSel = _sel; return; }
